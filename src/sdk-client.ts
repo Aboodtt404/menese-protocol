@@ -151,6 +151,53 @@ export async function callSdk<T = unknown>(
   }
 }
 
+// ── Address Cache ────────────────────────────────────────────────────
+// Addresses are deterministic per principal and never change, so we
+// cache them permanently in memory to avoid repeated relay round-trips.
+
+const addressCache = new Map<string, Record<string, unknown>>();
+
+/**
+ * Get the EVM address for a principal (cached).
+ * Uses POST /api/v1/execute with type "getMyEvmAddress" since the relay
+ * doesn't expose GET /api/v1/addresses.
+ * First call hits the relay; subsequent calls return instantly from memory.
+ */
+export async function queryAddresses(
+  config: MeneseConfig,
+  principal: string,
+): Promise<SdkResponse<Record<string, unknown>>> {
+  const cached = addressCache.get(principal);
+  if (cached) {
+    return { ok: true, data: cached };
+  }
+
+  // Try GET /api/v1/addresses first, fall back to POST execute
+  const getRes = await querySdk<Record<string, unknown>>("addresses", config, { principal });
+  if (getRes.ok) {
+    addressCache.set(principal, getRes.data);
+    return getRes;
+  }
+
+  // Fallback: use the execute endpoint to call getMyEvmAddress
+  const postRes = await callSdk<Record<string, unknown>>(
+    "execute",
+    { type: "getMyEvmAddress" },
+    config,
+    { principal },
+  );
+  if (postRes.ok) {
+    // Wrap in the expected { evm: { evmAddress } } shape
+    const data = postRes.data;
+    const normalized = data.evmAddress
+      ? { evm: { evmAddress: data.evmAddress } }
+      : data;
+    addressCache.set(principal, normalized as Record<string, unknown>);
+    return { ok: true, data: normalized as Record<string, unknown> };
+  }
+  return postRes;
+}
+
 /**
  * Convenience: call a GET endpoint on the relay (balances, addresses, logs, etc.)
  */

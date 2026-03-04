@@ -15,5 +15,10 @@
     "extensions": [
       "./index.ts"
     ]
+  },
+  "dependencies": {
+    "@dfinity/agent": "^3.4.3",
+    "@dfinity/candid": "^3.4.3",
+    "@dfinity/principal": "^3.4.3"
   }
 }

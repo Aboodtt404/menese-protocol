@@ -3,15 +3,15 @@ import { stringEnum } from "openclaw/plugin-sdk";
 import type { MeneseConfig } from "../config.js";
 import type { IdentityStore } from "../store.js";
 import { SUPPORTED_CHAINS } from "../chains.js";
-import { querySdk } from "../sdk-client.js";
-import { jsonResult, sdkToResult } from "./_helpers.js";
+import { getChainBalance } from "../ic-client.js";
+import { jsonResult } from "./_helpers.js";
 
 export function createBalanceTool(config: MeneseConfig, store: IdentityStore) {
   return {
     name: "menese_balance",
     label: "Menese Balance",
     description:
-      "Check the wallet balance for a specific blockchain. Returns the native token balance and USD value.",
+      "Check the wallet balance for a specific blockchain. Returns the native token balance.",
     parameters: Type.Object({
       chain: stringEnum([...SUPPORTED_CHAINS], {
         description: "Blockchain to check balance on",
@@ -23,8 +23,11 @@ export function createBalanceTool(config: MeneseConfig, store: IdentityStore) {
         return jsonResult({ error: "No wallet linked. Use /setup to connect your wallet." });
       }
 
-      const res = await querySdk(`balances?chain=${params.chain}`, config, { principal });
-      return sdkToResult(res);
+      const res = await getChainBalance(config, principal, params.chain);
+      if (!res.ok) {
+        return jsonResult({ error: res.error });
+      }
+      return jsonResult(res.data);
     },
   };
 }

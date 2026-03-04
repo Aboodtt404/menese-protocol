@@ -2,14 +2,14 @@ import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
 import type { MeneseConfig } from "../config.js";
 import type { IdentityStore } from "../store.js";
 import { isValidPrincipal } from "../store.js";
-import { querySdk } from "../sdk-client.js";
+import { getAllAddresses } from "../ic-client.js";
 
 /**
  * /setup [principal?] — Onboarding flow for new users.
  *
- * If a principal is provided, validates it, links it as unverified,
- * fetches the derived Ethereum address from the SDK canister,
- * and prompts the user to run /verify with that address.
+ * If a principal is provided, validates it, links it,
+ * fetches derived addresses from the SDK canister to confirm validity,
+ * and auto-verifies the wallet.
  */
 export function registerSetupCommand(
   api: OpenClawPluginApi,
@@ -64,49 +64,40 @@ export function registerSetupCommand(
         };
       }
 
-      // Link the principal (unverified)
+      // Link the principal and auto-verify
       store.link(ctx.channel, senderId, principal);
 
-      // Fetch all addresses — the EVM address is the ownership challenge
-      const addrRes = await querySdk<{ evm?: { evmAddress?: string } }>(
-        `addresses`,
-        config,
-        { principal },
-      );
+      // Fetch addresses from SDK canister to confirm the principal is valid
+      const addrRes = await getAllAddresses(config, principal);
 
       if (!addrRes.ok) {
-        // SDK call failed — still linked but can't set up challenge
         return {
           text:
-            `Wallet linked (unverified): \`${principal}\`\n\n` +
-            "Could not fetch your derived Ethereum address for verification at this time.\n" +
-            `Reason: ${addrRes.error.userMessage}\n\n` +
-            "You can still view balances and prices. " +
-            `Run \`/setup ${principal}\` again later to retry verification, ` +
-            "or contact support if this persists.",
+            `Wallet linked but could not fetch addresses.\n` +
+            `Principal: \`${principal}\`\n` +
+            `Reason: ${addrRes.error}\n\n` +
+            `Run \`/setup ${principal}\` again later to retry.`,
         };
       }
 
-      const ethAddress = (addrRes.data as { evm?: { evmAddress?: string } }).evm?.evmAddress;
-      if (!ethAddress) {
-        return {
-          text:
-            `Wallet linked (unverified): \`${principal}\`\n\n` +
-            "Could not derive your Ethereum address — the SDK response was missing the EVM field.\n\n" +
-            "You can still view balances and prices. " +
-            `Run \`/setup ${principal}\` again later to retry verification.`,
-        };
-      }
-      store.setChallenge(ctx.channel, senderId, ethAddress);
+      // Auto-verify — the principal is valid and we fetched addresses
+      store.markVerified(ctx.channel, senderId);
+
+      const evm = addrRes.data.evm?.evmAddress ?? "—";
+      const sol = addrRes.data.solana?.address ?? "—";
+      const btc = addrRes.data.bitcoin ?? "—";
 
       return {
         text:
-          `Wallet linked: \`${principal}\`\n\n` +
-          "**One more step — verify ownership**\n\n" +
-          "To prove you own this principal, provide the Ethereum address derived from it.\n" +
-          "You can find this in your NNS wallet or Menese dashboard under \"Ethereum Address\".\n\n" +
-          "Run: `/verify <your-ethereum-address>`\n\n" +
-          "Until verified, you can check balances and prices but cannot make transactions.",
+          `Wallet connected and verified!\n\n` +
+          `**Principal:** \`${principal}\`\n` +
+          `**ETH:** \`${evm}\`\n` +
+          `**SOL:** \`${sol}\`\n` +
+          `**BTC:** \`${btc}\`\n\n` +
+          "You're all set. Try:\n" +
+          "- *\"Show me my portfolio\"*\n" +
+          "- *\"What's the price of ETH?\"*\n" +
+          "- *\"Check my SOL balance\"*",
       };
     },
   });

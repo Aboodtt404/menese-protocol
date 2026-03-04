@@ -1,15 +1,24 @@
 import { Type } from "@sinclair/typebox";
 import type { MeneseConfig } from "../config.js";
 import type { IdentityStore } from "../store.js";
-import { querySdk } from "../sdk-client.js";
-import { sdkToResult } from "./_helpers.js";
+import { jsonResult } from "./_helpers.js";
 
-export function createPricesTool(config: MeneseConfig, _store: IdentityStore) {
+// Map common symbols to CoinGecko IDs
+const COINGECKO_IDS: Record<string, string> = {
+  BTC: "bitcoin", ETH: "ethereum", SOL: "solana", ICP: "internet-computer",
+  MATIC: "matic-network", ARB: "arbitrum", BNB: "binancecoin", AVAX: "avalanche-2",
+  SUI: "sui", TON: "the-open-network", XRP: "ripple", ADA: "cardano",
+  DOT: "polkadot", ATOM: "cosmos", NEAR: "near", APT: "aptos",
+  LTC: "litecoin", RUNE: "thorchain", TRX: "tron", OP: "optimism",
+  USDC: "usd-coin", USDT: "tether", DAI: "dai",
+};
+
+export function createPricesTool(_config: MeneseConfig, _store: IdentityStore) {
   return {
     name: "menese_prices",
     label: "Menese Prices",
     description:
-      "Get current prices for one or more tokens. Returns USD prices and 24h change. No wallet required.",
+      "Get current prices for one or more tokens. Returns USD prices. No wallet required.",
     parameters: Type.Object({
       tokens: Type.Array(Type.String({ description: "Token symbols, e.g. 'ETH', 'BTC', 'SOL'" }), {
         description: "List of token symbols to look up",
@@ -19,12 +28,39 @@ export function createPricesTool(config: MeneseConfig, _store: IdentityStore) {
       _toolCallId: string,
       params: { tokens: string[] },
     ) {
-      const tokenList = params.tokens.map((t) => t.toUpperCase()).join(",");
-      const res = await querySdk(
-        `strategy/prices?tokens=${encodeURIComponent(tokenList)}`,
-        config,
-      );
-      return sdkToResult(res);
+      const symbols = params.tokens.map((t) => t.toUpperCase());
+      const ids = symbols
+        .map((s) => COINGECKO_IDS[s])
+        .filter((id): id is string => !!id);
+
+      if (ids.length === 0) {
+        return jsonResult({ error: `Unknown token symbols: ${symbols.join(", ")}` });
+      }
+
+      try {
+        const url = `https://api.coingecko.com/api/v3/simple/price?ids=${ids.join(",")}&vs_currencies=usd&include_24hr_change=true`;
+        const res = await fetch(url, { signal: AbortSignal.timeout(10_000) });
+        if (!res.ok) {
+          return jsonResult({ error: `Price API error: HTTP ${res.status}` });
+        }
+        const data = (await res.json()) as Record<string, { usd?: number; usd_24h_change?: number }>;
+
+        // Map back to symbols
+        const prices: Record<string, { usd: number; change24h?: number }> = {};
+        for (const sym of symbols) {
+          const id = COINGECKO_IDS[sym];
+          if (id && data[id]) {
+            prices[sym] = {
+              usd: data[id].usd ?? 0,
+              change24h: data[id].usd_24h_change,
+            };
+          }
+        }
+
+        return jsonResult({ prices });
+      } catch (err) {
+        return jsonResult({ error: `Failed to fetch prices: ${err}` });
+      }
     },
   };
 }

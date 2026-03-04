@@ -1,12 +1,12 @@
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
 import type { MeneseConfig } from "../config.js";
 import type { IdentityStore } from "../store.js";
-import { querySdk } from "../sdk-client.js";
+import { getPortfolio } from "../ic-client.js";
 
 /**
  * /portfolio — Multi-chain balance summary.
  *
- * Fetches all balances from the SDK relay and formats them as a readable summary.
+ * Fetches all balances from the SDK canister directly and formats them.
  */
 export function registerPortfolioCommand(
   api: OpenClawPluginApi,
@@ -25,40 +25,31 @@ export function registerPortfolioCommand(
         };
       }
 
-      const res = await querySdk<Record<string, unknown>>("balances", config, { principal });
+      const res = await getPortfolio(config, principal);
 
       if (!res.ok) {
         return {
-          text: `Failed to fetch portfolio: ${res.error.userMessage}`,
+          text: `Failed to fetch portfolio: ${res.error}`,
           isError: true,
         };
       }
 
-      const data = res.data;
+      const balances = res.data;
 
-      if (!data || typeof data !== "object") {
-        return { text: "No balance data returned from the SDK." };
+      if (balances.length === 0) {
+        return { text: "No balances found. Your wallet may be empty or the chains are still syncing." };
       }
 
       const lines: string[] = ["**Your Portfolio**\n"];
-      let totalUsd = 0;
-
-      const balances = (data.balances ?? data) as Record<string, unknown>;
-      for (const [chain, info] of Object.entries(balances)) {
-        if (info && typeof info === "object") {
-          const bal = info as Record<string, unknown>;
-          const amount = bal.balance ?? bal.amount ?? "0";
-          const usd = typeof bal.usdValue === "number" ? bal.usdValue : 0;
-          totalUsd += usd;
-          const usdStr = usd > 0 ? ` ($${usd.toFixed(2)})` : "";
-          lines.push(`- **${chain}**: ${amount}${usdStr}`);
+      for (const b of balances) {
+        const amount = parseFloat(b.balance);
+        if (amount > 0) {
+          lines.push(`- **${b.chain}**: ${b.balance} ${b.symbol} (${b.address.slice(0, 8)}...)`);
         }
       }
 
       if (lines.length === 1) {
-        lines.push("_No balances found. Your wallet may be empty or the chains are still syncing._");
-      } else {
-        lines.push(`\n**Total**: ~$${totalUsd.toFixed(2)} USD`);
+        lines.push("_All balances are zero._");
       }
 
       return { text: lines.join("\n") };

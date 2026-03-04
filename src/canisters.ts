@@ -50,7 +50,7 @@ export const EGX30_ICRC1_LEDGER_CANISTER_ID = "lnaqc-daaaa-aaaan-qz42a-cai";
 export const GBX_ICRC1_LEDGER_CANISTER_ID = "lkbww-oyaaa-aaaan-qz42q-cai";
 
 /**
- * The primary SDK canister — this is what the relay talks to for all
- * wallet operations (balances, sends, swaps, bridges, staking, strategies).
+ * The primary SDK canister — called directly via @dfinity/agent for
+ * address derivation and balance queries (getEvmAddressFor, etc.).
  */
-export const DEFAULT_SDK_CANISTER_ID = AGENT_CANISTER_ID;
+export const DEFAULT_SDK_CANISTER_ID = SDK_CANISTER_ID;
