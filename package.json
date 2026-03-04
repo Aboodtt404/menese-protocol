@@ -1,28 +1,13 @@
 {
   "name": "@menese/menese-protocol",
   "version": "0.1.0",
+  "private": true,
   "description": "Menese Protocol — multi-chain crypto wallet, swaps, bridges, lending & strategies for OpenClaw",
   "type": "module",
   "license": "MIT",
-  "repository": {
-    "type": "git",
-    "url": "https://github.com/Aboodtt404/menese-protocol.git"
+  "devDependencies": {
+    "openclaw": "workspace:*"
   },
-  "keywords": [
-    "openclaw",
-    "openclaw-plugin",
-    "crypto",
-    "defi",
-    "multi-chain",
-    "icp",
-    "internet-computer",
-    "menese",
-    "wallet",
-    "swap",
-    "bridge",
-    "staking",
-    "lending"
-  ],
   "peerDependencies": {
     "openclaw": ">=2026.1.26"
   },

@@ -7,6 +7,7 @@ import { registerPortfolioCommand } from "./portfolio.js";
 import { registerHistoryCommand } from "./history.js";
 import { registerStrategyCommand } from "./strategy.js";
 import { registerSubscribeCommand } from "./subscribe.js";
+import { registerVerifyCommand } from "./verify.js";
 
 export function registerMeneseCommands(
   api: OpenClawPluginApi,
@@ -15,6 +16,7 @@ export function registerMeneseCommands(
 ): void {
   registerSetupCommand(api, config, store);
   registerLinkWalletCommand(api, config, store);
+  registerVerifyCommand(api, config, store);
   registerPortfolioCommand(api, config, store);
   registerHistoryCommand(api, config, store);
   registerStrategyCommand(api, config, store);

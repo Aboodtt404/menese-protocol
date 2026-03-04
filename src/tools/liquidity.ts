@@ -4,7 +4,7 @@ import type { MeneseConfig } from "../config.js";
 import type { IdentityStore } from "../store.js";
 import { SUPPORTED_CHAINS } from "../chains.js";
 import { callSdk } from "../sdk-client.js";
-import { jsonResult, sdkToResult } from "./_helpers.js";
+import { jsonResult, sdkToResult, requireVerifiedWallet } from "./_helpers.js";
 
 const MODES = ["quote", "execute"] as const;
 const ACTIONS = ["add", "remove"] as const;
@@ -14,7 +14,7 @@ export function createLiquidityTool(config: MeneseConfig, store: IdentityStore) 
     name: "menese_liquidity",
     label: "Menese Liquidity",
     description:
-      "Add or remove liquidity from DEX pools. Use mode 'quote' first to show pool info, share percentage, and impermanent loss warning, then 'execute' after confirmation. Supports EVM DEXes and ICP pools.",
+      "Add or remove liquidity from DEX pools. Use mode 'quote' first to show pool info, share percentage, and impermanent loss warning, then 'execute' after confirmation. Supports EVM DEXes and ICP pools. Requires a verified wallet.",
     parameters: Type.Object({
       chain: stringEnum([...SUPPORTED_CHAINS], {
         description: "Blockchain where the pool exists",
@@ -50,10 +50,9 @@ export function createLiquidityTool(config: MeneseConfig, store: IdentityStore) 
         mode: string;
       },
     ) {
-      const principal = store.resolve("tool", "current");
-      if (!principal) {
-        return jsonResult({ error: "No wallet linked. Use /setup to connect your wallet." });
-      }
+      const wallet = requireVerifiedWallet(store);
+      if ("error" in wallet) return wallet.error;
+      const { principal } = wallet;
 
       const res = await callSdk(
         "execute",

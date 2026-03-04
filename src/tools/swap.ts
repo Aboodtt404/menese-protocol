@@ -4,7 +4,7 @@ import type { MeneseConfig } from "../config.js";
 import type { IdentityStore } from "../store.js";
 import { SUPPORTED_CHAINS } from "../chains.js";
 import { callSdk } from "../sdk-client.js";
-import { jsonResult, sdkToResult } from "./_helpers.js";
+import { jsonResult, sdkToResult, requireVerifiedWallet } from "./_helpers.js";
 
 const MODES = ["quote", "execute"] as const;
 
@@ -13,7 +13,7 @@ export function createSwapTool(config: MeneseConfig, store: IdentityStore) {
     name: "menese_swap",
     label: "Menese Swap",
     description:
-      "Swap tokens on a given chain. Use mode 'quote' first to show the user expected output and fees, then 'execute' after confirmation. Supports multi-hop routes automatically.",
+      "Swap tokens on a given chain. Use mode 'quote' first to show the user expected output and fees, then 'execute' after confirmation. Supports multi-hop routes automatically. Requires a verified wallet.",
     parameters: Type.Object({
       chain: stringEnum([...SUPPORTED_CHAINS], {
         description: "Blockchain to swap on",
@@ -41,10 +41,9 @@ export function createSwapTool(config: MeneseConfig, store: IdentityStore) {
         mode: string;
       },
     ) {
-      const principal = store.resolve("tool", "current");
-      if (!principal) {
-        return jsonResult({ error: "No wallet linked. Use /setup to connect your wallet." });
-      }
+      const wallet = requireVerifiedWallet(store);
+      if ("error" in wallet) return wallet.error;
+      const { principal } = wallet;
 
       const res = await callSdk(
         "execute",

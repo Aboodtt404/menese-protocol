@@ -4,7 +4,7 @@ import type { MeneseConfig } from "../config.js";
 import type { IdentityStore } from "../store.js";
 import { SUPPORTED_CHAINS } from "../chains.js";
 import { callSdk, querySdk } from "../sdk-client.js";
-import { jsonResult, sdkToResult } from "./_helpers.js";
+import { jsonResult, sdkToResult, requireVerifiedWallet } from "./_helpers.js";
 
 const ACTIONS = ["create", "list", "cancel", "status"] as const;
 const RULE_TYPES = [
@@ -23,7 +23,7 @@ export function createStrategyTool(config: MeneseConfig, store: IdentityStore) {
     name: "menese_strategy",
     label: "Menese Strategy",
     description:
-      "Create and manage automated trading strategies. Supports stop-loss, take-profit, DCA, rebalance, volatility triggers, and scheduled operations. 'create' requires user confirmation; 'list', 'cancel', and 'status' are free.",
+      "Create and manage automated trading strategies. Supports stop-loss, take-profit, DCA, rebalance, volatility triggers, and scheduled operations. 'create' and 'cancel' require a verified wallet; 'list' and 'status' only need a linked wallet.",
     parameters: Type.Object({
       action: stringEnum([...ACTIONS], {
         description: "'create' a new rule, 'list' active rules, 'cancel' a rule, or check 'status' of a rule",
@@ -63,33 +63,44 @@ export function createStrategyTool(config: MeneseConfig, store: IdentityStore) {
       _toolCallId: string,
       params: Record<string, unknown>,
     ) {
-      const principal = store.resolve("tool", "current");
-      if (!principal) {
-        return jsonResult({ error: "No wallet linked. Use /setup to connect your wallet." });
-      }
-
       const action = params.action as string;
 
-      if (action === "list") {
-        const res = await querySdk("strategy/rules", config, { principal });
-        return sdkToResult(res);
-      }
-
-      if (action === "status" || action === "cancel") {
-        if (!params.ruleId) {
-          return jsonResult({ error: "ruleId is required for 'status' and 'cancel' actions." });
+      // Read-only actions: only need a linked wallet (no verification required)
+      if (action === "list" || action === "status") {
+        const principal = store.resolve("tool", "current");
+        if (!principal) {
+          return jsonResult({ error: "No wallet linked. Use /setup to connect your wallet." });
         }
-        if (action === "cancel") {
-          const res = await callSdk(
-            "execute",
-            { type: "strategy_cancel", ruleId: params.ruleId },
-            config,
-            { principal },
-          );
+
+        if (action === "list") {
+          const res = await querySdk("strategy/rules", config, { principal });
           return sdkToResult(res);
+        }
+
+        // status
+        if (!params.ruleId) {
+          return jsonResult({ error: "ruleId is required for 'status' action." });
         }
         const res = await querySdk(
           `strategy/rules?ruleId=${encodeURIComponent(params.ruleId as string)}`,
+          config,
+          { principal },
+        );
+        return sdkToResult(res);
+      }
+
+      // Write actions (create, cancel): require verified wallet
+      const wallet = requireVerifiedWallet(store);
+      if ("error" in wallet) return wallet.error;
+      const { principal } = wallet;
+
+      if (action === "cancel") {
+        if (!params.ruleId) {
+          return jsonResult({ error: "ruleId is required for 'cancel' action." });
+        }
+        const res = await callSdk(
+          "execute",
+          { type: "strategy_cancel", ruleId: params.ruleId },
           config,
           { principal },
         );

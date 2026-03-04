@@ -2,22 +2,24 @@ import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
 import type { MeneseConfig } from "../config.js";
 import type { IdentityStore } from "../store.js";
 import { isValidPrincipal } from "../store.js";
+import { querySdk } from "../sdk-client.js";
 
 /**
  * /link-wallet <principal|unlink> — Direct wallet linking or unlinking.
  *
  * For users who already know their principal and want to link/unlink quickly.
+ * Links as unverified — user must still run /verify to prove ownership.
  */
 export function registerLinkWalletCommand(
   api: OpenClawPluginApi,
-  _config: MeneseConfig,
+  config: MeneseConfig,
   store: IdentityStore,
 ): void {
   api.registerCommand({
     name: "link-wallet",
     description: "Link or unlink your ICP principal to this channel",
     acceptsArgs: true,
-    handler: (ctx) => {
+    handler: async (ctx) => {
       const arg = ctx.args?.trim();
 
       if (!arg) {
@@ -50,8 +52,41 @@ export function registerLinkWalletCommand(
 
       store.link(ctx.channel, senderId, arg);
 
+      // Fetch all addresses — the EVM address is the ownership challenge
+      const addrRes = await querySdk<{ evm?: { evmAddress?: string } }>(
+        `addresses`,
+        config,
+        { principal: arg },
+      );
+
+      if (!addrRes.ok) {
+        const truncated = arg.length > 20 ? `${arg.slice(0, 10)}...${arg.slice(-10)}` : arg;
+        return {
+          text:
+            `Wallet linked (unverified): \`${truncated}\`\n\n` +
+            "Could not fetch derived address for verification. Run `/setup` to retry.\n" +
+            "Until verified, only read operations (balance, prices) are available.",
+        };
+      }
+
+      const ethAddress = (addrRes.data as { evm?: { evmAddress?: string } }).evm?.evmAddress;
+      if (!ethAddress) {
+        const truncated = arg.length > 20 ? `${arg.slice(0, 10)}...${arg.slice(-10)}` : arg;
+        return {
+          text:
+            `Wallet linked (unverified): \`${truncated}\`\n\n` +
+            "Could not derive your Ethereum address. Run `/setup` to retry.\n" +
+            "Until verified, only read operations (balance, prices) are available.",
+        };
+      }
+      store.setChallenge(ctx.channel, senderId, ethAddress);
+
       const truncated = arg.length > 20 ? `${arg.slice(0, 10)}...${arg.slice(-10)}` : arg;
-      return { text: `Wallet linked: \`${truncated}\`` };
+      return {
+        text:
+          `Wallet linked (unverified): \`${truncated}\`\n\n` +
+          "Run `/verify <your-ethereum-address>` to prove ownership and unlock transactions.",
+      };
     },
   });
 }

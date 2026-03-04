@@ -4,7 +4,7 @@ import type { MeneseConfig } from "../config.js";
 import type { IdentityStore } from "../store.js";
 import { SUPPORTED_CHAINS } from "../chains.js";
 import { callSdk } from "../sdk-client.js";
-import { jsonResult, sdkToResult } from "./_helpers.js";
+import { jsonResult, sdkToResult, requireVerifiedWallet } from "./_helpers.js";
 
 const MODES = ["quote", "execute"] as const;
 const ACTIONS = ["stake", "unstake", "wrap", "unwrap"] as const;
@@ -14,7 +14,7 @@ export function createStakeTool(config: MeneseConfig, store: IdentityStore) {
     name: "menese_stake",
     label: "Menese Stake",
     description:
-      "Stake, unstake, wrap, or unwrap tokens. Use mode 'quote' first to show current APY and estimated rewards, then 'execute' after confirmation. Supports Lido (ETH staking) and other protocols.",
+      "Stake, unstake, wrap, or unwrap tokens. Use mode 'quote' first to show current APY and estimated rewards, then 'execute' after confirmation. Supports Lido (ETH staking) and other protocols. Requires a verified wallet.",
     parameters: Type.Object({
       chain: stringEnum([...SUPPORTED_CHAINS], {
         description: "Blockchain to stake on",
@@ -38,10 +38,9 @@ export function createStakeTool(config: MeneseConfig, store: IdentityStore) {
         mode: string;
       },
     ) {
-      const principal = store.resolve("tool", "current");
-      if (!principal) {
-        return jsonResult({ error: "No wallet linked. Use /setup to connect your wallet." });
-      }
+      const wallet = requireVerifiedWallet(store);
+      if ("error" in wallet) return wallet.error;
+      const { principal } = wallet;
 
       const res = await callSdk(
         "execute",

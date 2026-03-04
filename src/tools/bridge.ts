@@ -4,7 +4,7 @@ import type { MeneseConfig } from "../config.js";
 import type { IdentityStore } from "../store.js";
 import { SUPPORTED_CHAINS } from "../chains.js";
 import { callSdk } from "../sdk-client.js";
-import { jsonResult, sdkToResult } from "./_helpers.js";
+import { jsonResult, sdkToResult, requireVerifiedWallet } from "./_helpers.js";
 
 const MODES = ["quote", "execute"] as const;
 
@@ -13,7 +13,7 @@ export function createBridgeTool(config: MeneseConfig, store: IdentityStore) {
     name: "menese_bridge",
     label: "Menese Bridge",
     description:
-      "Bridge tokens between blockchains. Use mode 'quote' first to show fees and estimated time, then 'execute' after confirmation. Automatically selects the best route (CCTP, Ultrafast, etc.).",
+      "Bridge tokens between blockchains. Use mode 'quote' first to show fees and estimated time, then 'execute' after confirmation. Automatically selects the best route (CCTP, Ultrafast, etc.). Requires a verified wallet.",
     parameters: Type.Object({
       fromChain: stringEnum([...SUPPORTED_CHAINS], {
         description: "Source blockchain",
@@ -39,10 +39,9 @@ export function createBridgeTool(config: MeneseConfig, store: IdentityStore) {
         mode: string;
       },
     ) {
-      const principal = store.resolve("tool", "current");
-      if (!principal) {
-        return jsonResult({ error: "No wallet linked. Use /setup to connect your wallet." });
-      }
+      const wallet = requireVerifiedWallet(store);
+      if ("error" in wallet) return wallet.error;
+      const { principal } = wallet;
 
       const res = await callSdk(
         "execute",

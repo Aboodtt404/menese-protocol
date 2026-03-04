@@ -4,7 +4,7 @@ import type { MeneseConfig } from "../config.js";
 import type { IdentityStore } from "../store.js";
 import { SUPPORTED_CHAINS } from "../chains.js";
 import { callSdk } from "../sdk-client.js";
-import { jsonResult, sdkToResult } from "./_helpers.js";
+import { jsonResult, sdkToResult, requireVerifiedWallet } from "./_helpers.js";
 
 const MODES = ["quote", "execute"] as const;
 const ACTIONS = ["supply", "withdraw", "borrow", "repay"] as const;
@@ -15,7 +15,7 @@ export function createLendTool(config: MeneseConfig, store: IdentityStore) {
     name: "menese_lend",
     label: "Menese Lend",
     description:
-      "Supply, withdraw, borrow, or repay tokens on lending protocols. Use mode 'quote' first to show current APY and health factor impact, then 'execute' after confirmation. Currently supports Aave V3.",
+      "Supply, withdraw, borrow, or repay tokens on lending protocols. Use mode 'quote' first to show current APY and health factor impact, then 'execute' after confirmation. Currently supports Aave V3. Requires a verified wallet.",
     parameters: Type.Object({
       chain: stringEnum([...SUPPORTED_CHAINS], {
         description: "Blockchain where the lending protocol operates",
@@ -43,10 +43,9 @@ export function createLendTool(config: MeneseConfig, store: IdentityStore) {
         mode: string;
       },
     ) {
-      const principal = store.resolve("tool", "current");
-      if (!principal) {
-        return jsonResult({ error: "No wallet linked. Use /setup to connect your wallet." });
-      }
+      const wallet = requireVerifiedWallet(store);
+      if ("error" in wallet) return wallet.error;
+      const { principal } = wallet;
 
       const res = await callSdk(
         "execute",
