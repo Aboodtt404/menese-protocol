@@ -5,13 +5,13 @@
   "uiHints": {
     "sdkCanisterId": {
       "label": "SDK Canister ID",
-      "placeholder": "ewcc5-fiaaa-aaaab-afafq-cai",
-      "help": "The MeneseAgent canister ID. Default is the production agent canister."
+      "placeholder": "urs2a-ziaaa-aaaad-aembq-cai",
+      "help": "The MeneseSDK canister ID. Default is the production SDK canister."
     },
     "relayUrl": {
       "label": "VPS Relay URL",
       "placeholder": "http://localhost:18791",
-      "help": "HTTP endpoint of the VPS relay that forwards calls to the SDK canister."
+      "help": "HTTP endpoint of the VPS relay (reserved for future use)."
     },
     "autoApproveThreshold": {
       "label": "Auto-Approve Threshold (USD)",
@@ -23,6 +23,17 @@
       "placeholder": "msk_...",
       "sensitive": true,
       "help": "Menese developer API key for authenticated relay access."
+    },
+    "factoryCanisterId": {
+      "label": "Factory Canister ID",
+      "help": "MeneseAgent factory canister ID. Required for /deploy-agent to create new agent canisters.",
+      "advanced": true
+    },
+    "factoryAdminSeed": {
+      "label": "Factory Admin Seed",
+      "sensitive": true,
+      "help": "Ed25519 hex seed for the factory admin identity. Required for spawning agent canisters.",
+      "advanced": true
     },
     "testMode": {
       "label": "Test Mode",
@@ -45,6 +56,12 @@
         "minimum": 0
       },
       "developerKey": {
+        "type": "string"
+      },
+      "factoryCanisterId": {
+        "type": "string"
+      },
+      "factoryAdminSeed": {
         "type": "string"
       },
       "testMode": {

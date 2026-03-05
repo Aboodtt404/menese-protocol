@@ -58,7 +58,10 @@ export function createStrategyTool(config: MeneseConfig, store: IdentityStore) {
       "For 'create': provide strategyType, chain, amount, and relevant params.\n" +
       "For 'list': shows all active strategy rules.\n" +
       "For 'cancel': provide ruleId to delete a strategy.\n" +
-      "Requires a wallet (run /setup first).",
+      "Requires a wallet (run /setup first).\n\n" +
+      "IMPORTANT: Always display the full result to the user after every action (create, list, cancel). " +
+      "After creating a strategy, show the rule ID, type, chain, trigger price, and status. " +
+      "Never silently complete — the user expects confirmation with details.",
     parameters: Type.Object({
       action: stringEnum([...ACTIONS], {
         description: "'create' a new strategy, 'list' active strategies, 'cancel' by ruleId",
@@ -83,7 +86,7 @@ export function createStrategyTool(config: MeneseConfig, store: IdentityStore) {
       })),
       // -- Price-trigger specific --
       targetPrice: Type.Optional(Type.String({
-        description: "Target price in USD micro-units (1 USD = 1,000,000) that triggers the strategy. Required for take_profit, stop_loss.",
+        description: "Target price in USD (e.g. '90' for $90, '150.50' for $150.50). Required for take_profit, stop_loss.",
       })),
       // -- Cancel --
       ruleId: Type.Optional(Type.Number({
@@ -123,6 +126,10 @@ export function createStrategyTool(config: MeneseConfig, store: IdentityStore) {
             });
           }
           const res = await listStrategies(config, wallet.seed);
+          if (res.ok) {
+            const rules = (res.data as RawRule[]).map(formatRule);
+            return jsonResult({ strategies: rules, count: rules.length });
+          }
           return writeToResult(res);
         }
 
@@ -196,6 +203,18 @@ export function createStrategyTool(config: MeneseConfig, store: IdentityStore) {
           }
 
           const res = await addStrategy(config, wallet.seed, rule);
+          if (res.ok) {
+            return jsonResult({
+              success: true,
+              ruleId: res.data,
+              strategyType: params.strategyType,
+              chain: params.chain,
+              amount: params.amount,
+              targetPrice: params.targetPrice ?? null,
+              intervalSeconds: params.intervalSeconds ?? null,
+              message: `Strategy created successfully (Rule #${res.data})`,
+            });
+          }
           return writeToResult(res);
         }
 
@@ -274,4 +293,46 @@ function parseAmount(amount: string, chain: string, evmChains: readonly string[]
   if (frac.length > decimals) frac = frac.slice(0, decimals);
   frac = frac.padEnd(decimals, "0");
   return BigInt(whole) * 10n ** BigInt(decimals) + BigInt(frac);
+}
+
+/** Raw rule shape from the canister (Candid variant fields). */
+interface RawRule {
+  id: string | bigint;
+  status: Record<string, null>;
+  ruleType: Record<string, null>;
+  chainType: Record<string, null>;
+  triggerPrice: string | bigint;
+  swapAmountLamports: (string | bigint)[];
+  swapAmountWei: (string | bigint)[];
+  swapAmountDrops: (string | bigint)[];
+  dcaConfig: unknown[];
+  createdAt: string | bigint;
+  [key: string]: unknown;
+}
+
+/** Extract the first key from a Candid variant like {TakeProfit: null} → "TakeProfit". */
+function variantKey(v: Record<string, null> | undefined): string {
+  if (!v) return "unknown";
+  return Object.keys(v)[0] ?? "unknown";
+}
+
+/** Convert a raw canister rule into a human-readable object. */
+function formatRule(raw: RawRule) {
+  const triggerPrice = Number(raw.triggerPrice);
+  const triggerUsd = triggerPrice > 0 ? triggerPrice / 1_000_000 : null;
+  const amount =
+    raw.swapAmountLamports?.[0] ? `${Number(raw.swapAmountLamports[0]) / 1e9} (lamports)` :
+    raw.swapAmountWei?.[0] ? `${Number(raw.swapAmountWei[0]) / 1e18} (wei)` :
+    raw.swapAmountDrops?.[0] ? `${Number(raw.swapAmountDrops[0]) / 1e6} (drops)` :
+    "n/a";
+
+  return {
+    id: Number(raw.id),
+    type: variantKey(raw.ruleType),
+    chain: variantKey(raw.chainType),
+    status: variantKey(raw.status),
+    triggerPriceUsd: triggerUsd ? `$${triggerUsd.toFixed(2)}` : null,
+    amount,
+    hasDca: raw.dcaConfig?.length > 0,
+  };
 }

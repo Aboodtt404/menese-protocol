@@ -1,13 +1,29 @@
 {
-  "name": "@menese/menese-protocol",
+  "name": "@menese_protocol/openclaw",
   "version": "0.1.0",
-  "private": true,
   "description": "Menese Protocol — multi-chain crypto wallet, swaps, bridges, lending & strategies for OpenClaw",
   "type": "module",
   "license": "MIT",
-  "devDependencies": {
-    "openclaw": "workspace:*"
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/menese/menese-protocol.git"
   },
+  "keywords": [
+    "openclaw",
+    "plugin",
+    "crypto",
+    "defi",
+    "wallet",
+    "icp",
+    "menese"
+  ],
+  "files": [
+    "index.ts",
+    "src/",
+    "openclaw.plugin.json",
+    "README.md",
+    "LICENSE"
+  ],
   "peerDependencies": {
     "openclaw": ">=2026.1.26"
   },
@@ -19,6 +35,7 @@
   "dependencies": {
     "@dfinity/agent": "^3.4.3",
     "@dfinity/candid": "^3.4.3",
+    "@dfinity/identity": "^3.4.3",
     "@dfinity/principal": "^3.4.3"
   }
 }

@@ -31,7 +31,7 @@ export function registerAuditLogger(api: OpenClawPluginApi, config: MeneseConfig
   function appendEntry(entry: AuditEntry): void {
     try {
       fs.mkdirSync(dir, { recursive: true });
-      fs.appendFileSync(logPath, JSON.stringify(entry) + "\n", "utf-8");
+      fs.appendFileSync(logPath, JSON.stringify(entry, (_k, v) => typeof v === "bigint" ? v.toString() : v) + "\n", "utf-8");
     } catch {
       // Audit logging should never break the tool flow
     }
