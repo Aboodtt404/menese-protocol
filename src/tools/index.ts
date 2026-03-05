@@ -84,10 +84,22 @@ export function registerMeneseTools(
       if (principal) {
         store.link("tool", "current", principal);
 
-        // Also copy verification status so requireVerifiedWallet works
+        // Copy verification status
         const entry = store.getEntry(channel, senderId!);
         if (entry?.verified) {
           store.markVerified("tool", "current");
+        }
+
+        // Copy identity seed so requireAuthenticatedWallet works
+        if (entry?.identitySeed) {
+          store.setSeed("tool", "current", entry.identitySeed);
+        }
+
+        // Copy agent canister ID so requireAgentWallet works
+        if (entry?.agentCanisterId) {
+          store.setAgent("tool", "current", entry.agentCanisterId);
+        } else {
+          store.clearAgent("tool", "current");
         }
       } else {
         // Clear stale tool:current so tools don't use a previous user's principal

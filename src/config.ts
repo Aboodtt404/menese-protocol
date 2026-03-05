@@ -8,6 +8,8 @@ export interface MeneseConfig {
   relayUrl: string;
   autoApproveThreshold: number;
   developerKey?: string;
+  factoryCanisterId?: string;
+  factoryAdminSeed?: string;
   testMode: boolean;
 }
 
@@ -41,11 +43,23 @@ export function parseMeneseConfig(value: unknown): MeneseConfig {
       ? raw.developerKey.trim()
       : (process.env.MENESE_DEVELOPER_KEY ?? undefined);
 
+  const factoryCanisterId =
+    typeof raw.factoryCanisterId === "string" && raw.factoryCanisterId.trim()
+      ? raw.factoryCanisterId.trim()
+      : (process.env.MENESE_FACTORY_CANISTER_ID ?? undefined);
+
+  const factoryAdminSeed =
+    typeof raw.factoryAdminSeed === "string" && raw.factoryAdminSeed.trim()
+      ? raw.factoryAdminSeed.trim()
+      : (process.env.MENESE_FACTORY_ADMIN_SEED ?? undefined);
+
   return {
     sdkCanisterId,
     relayUrl,
     autoApproveThreshold,
     developerKey,
+    factoryCanisterId,
+    factoryAdminSeed,
     testMode,
   };
 }

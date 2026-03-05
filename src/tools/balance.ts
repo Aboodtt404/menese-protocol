@@ -5,6 +5,7 @@ import type { IdentityStore } from "../store.js";
 import { SUPPORTED_CHAINS } from "../chains.js";
 import { getChainBalance } from "../ic-client.js";
 import { jsonResult } from "./_helpers.js";
+import { cacheFetch, CacheKeys, TTL } from "../cache.js";
 
 export function createBalanceTool(config: MeneseConfig, store: IdentityStore) {
   return {
@@ -23,7 +24,11 @@ export function createBalanceTool(config: MeneseConfig, store: IdentityStore) {
         return jsonResult({ error: "No wallet linked. Use /setup to connect your wallet." });
       }
 
-      const res = await getChainBalance(config, principal, params.chain);
+      const res = await cacheFetch(
+        CacheKeys.balance(principal, params.chain),
+        TTL.BALANCE,
+        () => getChainBalance(config, principal, params.chain),
+      );
       if (!res.ok) {
         return jsonResult({ error: res.error });
       }

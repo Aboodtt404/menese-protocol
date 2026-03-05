@@ -3,12 +3,8 @@ import type { MeneseConfig } from "../config.js";
 import type { IdentityStore } from "../store.js";
 
 /**
- * /verify — Show wallet verification status.
- *
- * Wallets are now auto-verified during /setup.
- * This command exists for users who may have linked before auto-verify was added.
+ * /verify — Show wallet status. Wallets are auto-verified on /setup.
  */
-
 export function registerVerifyCommand(
   api: OpenClawPluginApi,
   _config: MeneseConfig,
@@ -16,7 +12,7 @@ export function registerVerifyCommand(
 ): void {
   api.registerCommand({
     name: "verify",
-    description: "Check wallet verification status",
+    description: "Check wallet status",
     acceptsArgs: false,
     handler: (ctx) => {
       const senderId = ctx.senderId ?? "unknown";
@@ -24,23 +20,22 @@ export function registerVerifyCommand(
 
       if (!entry) {
         return {
-          text: "No wallet linked. Run `/setup <principal>` first.",
+          text: "No wallet set up. Run `/setup` to create one.",
           isError: true,
         };
       }
 
-      if (entry.verified) {
-        return {
-          text: `Your wallet is verified.\nPrincipal: \`${entry.principal}\``,
-        };
-      }
-
-      // Legacy unverified entry — tell them to re-run setup
+      const hasSeed = !!entry.identitySeed;
+      const agentLine = entry.agentCanisterId
+        ? `Agent: \`${entry.agentCanisterId}\` (on-chain automation enabled)`
+        : "Agent: not connected (run `/deploy-agent link <id>` to enable)";
       return {
         text:
-          `Your wallet is linked but not yet verified.\n` +
-          `Principal: \`${entry.principal}\`\n\n` +
-          `Run \`/setup ${entry.principal}\` to verify.`,
+          `**Wallet Status**\n\n` +
+          `Principal: \`${entry.principal}\`\n` +
+          `Verified: ${entry.verified ? "yes" : "no"}\n` +
+          `Identity: ${hasSeed ? "bot-managed" : "external (legacy)"}\n` +
+          agentLine,
       };
     },
   });

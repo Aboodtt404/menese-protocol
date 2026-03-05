@@ -3,6 +3,7 @@ import type { MeneseConfig } from "../config.js";
 import type { IdentityStore } from "../store.js";
 import { getPortfolio } from "../ic-client.js";
 import { jsonResult } from "./_helpers.js";
+import { cacheFetch, CacheKeys, TTL } from "../cache.js";
 
 export function createPortfolioTool(config: MeneseConfig, store: IdentityStore) {
   return {
@@ -17,7 +18,11 @@ export function createPortfolioTool(config: MeneseConfig, store: IdentityStore) 
         return jsonResult({ error: "No wallet linked. Use /setup to connect your wallet." });
       }
 
-      const res = await getPortfolio(config, principal);
+      const res = await cacheFetch(
+        CacheKeys.portfolio(principal),
+        TTL.PORTFOLIO,
+        () => getPortfolio(config, principal),
+      );
       if (!res.ok) {
         return jsonResult({ error: res.error });
       }

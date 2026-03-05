@@ -3,30 +3,26 @@ import { stringEnum } from "openclaw/plugin-sdk";
 import type { MeneseConfig } from "../config.js";
 import type { IdentityStore } from "../store.js";
 import { SUPPORTED_CHAINS } from "../chains.js";
-import { callSdk } from "../sdk-client.js";
-import { jsonResult, sdkToResult, requireVerifiedWallet } from "./_helpers.js";
+import { stakeOrLend } from "../ic-client.js";
+import { writeToResult, requireAuthenticatedWallet, invalidateBalanceCaches } from "./_helpers.js";
 
-const MODES = ["quote", "execute"] as const;
-const ACTIONS = ["stake", "unstake", "wrap", "unwrap"] as const;
+const ACTIONS = ["stake", "unstake"] as const;
 
 export function createStakeTool(config: MeneseConfig, store: IdentityStore) {
   return {
     name: "menese_stake",
     label: "Menese Stake",
     description:
-      "Stake, unstake, wrap, or unwrap tokens. Use mode 'quote' first to show current APY and estimated rewards, then 'execute' after confirmation. Supports Lido (ETH staking) and other protocols. Requires a verified wallet.",
+      "Stake or unstake tokens. Supports Lido (ETH→stETH) on EVM chains. Requires a wallet (run /setup first).",
     parameters: Type.Object({
       chain: stringEnum([...SUPPORTED_CHAINS], {
         description: "Blockchain to stake on",
       }),
       action: stringEnum([...ACTIONS], {
-        description: "'stake' to deposit, 'unstake' to withdraw, 'wrap'/'unwrap' for wrapped staking derivatives (e.g. wstETH)",
+        description: "'stake' to deposit, 'unstake' to withdraw",
       }),
-      protocol: Type.String({ description: "Staking protocol, e.g. 'lido', 'aave'" }),
+      protocol: Type.String({ description: "Staking protocol, e.g. 'lido'" }),
       amount: Type.String({ description: "Amount to stake/unstake (as a decimal string)" }),
-      mode: stringEnum([...MODES], {
-        description: "Use 'quote' to preview APY and rewards, 'execute' to stake after user confirms",
-      }),
     }),
     async execute(
       _toolCallId: string,
@@ -35,28 +31,19 @@ export function createStakeTool(config: MeneseConfig, store: IdentityStore) {
         action: string;
         protocol: string;
         amount: string;
-        mode: string;
       },
     ) {
-      const wallet = requireVerifiedWallet(store);
+      const wallet = requireAuthenticatedWallet(store);
       if ("error" in wallet) return wallet.error;
-      const { principal } = wallet;
 
-      const res = await callSdk(
-        "execute",
-        {
-          type: "stake",
-          mode: params.mode,
-          chain: params.chain,
-          protocol: params.protocol,
-          amount: params.amount,
-          action: params.action,
-        },
-        config,
-        { principal },
-      );
-
-      return sdkToResult(res);
+      const res = await stakeOrLend(config, wallet.seed, {
+        action: params.action,
+        protocol: params.protocol,
+        chain: params.chain,
+        amount: params.amount,
+      });
+      if (res.ok) invalidateBalanceCaches(wallet.principal);
+      return writeToResult(res);
     },
   };
 }

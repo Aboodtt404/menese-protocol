@@ -8,6 +8,7 @@ import { registerHistoryCommand } from "./history.js";
 import { registerStrategyCommand } from "./strategy.js";
 import { registerSubscribeCommand } from "./subscribe.js";
 import { registerVerifyCommand } from "./verify.js";
+import { registerDeployAgentCommand } from "./deploy-agent.js";
 
 export function registerMeneseCommands(
   api: OpenClawPluginApi,
@@ -21,4 +22,5 @@ export function registerMeneseCommands(
   registerHistoryCommand(api, config, store);
   registerStrategyCommand(api, config, store);
   registerSubscribeCommand(api, config, store);
+  registerDeployAgentCommand(api, config, store);
 }

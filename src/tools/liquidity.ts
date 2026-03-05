@@ -3,18 +3,16 @@ import { stringEnum } from "openclaw/plugin-sdk";
 import type { MeneseConfig } from "../config.js";
 import type { IdentityStore } from "../store.js";
 import { SUPPORTED_CHAINS } from "../chains.js";
-import { callSdk } from "../sdk-client.js";
-import { jsonResult, sdkToResult, requireVerifiedWallet } from "./_helpers.js";
+import { jsonResult, requireAuthenticatedWallet } from "./_helpers.js";
 
-const MODES = ["quote", "execute"] as const;
 const ACTIONS = ["add", "remove"] as const;
 
-export function createLiquidityTool(config: MeneseConfig, store: IdentityStore) {
+export function createLiquidityTool(_config: MeneseConfig, store: IdentityStore) {
   return {
     name: "menese_liquidity",
     label: "Menese Liquidity",
     description:
-      "Add or remove liquidity from DEX pools. Use mode 'quote' first to show pool info, share percentage, and impermanent loss warning, then 'execute' after confirmation. Supports EVM DEXes and ICP pools. Requires a verified wallet.",
+      "Add or remove liquidity from DEX pools. Currently queued for SDK integration. Requires a wallet (run /setup first).",
     parameters: Type.Object({
       chain: stringEnum([...SUPPORTED_CHAINS], {
         description: "Blockchain where the pool exists",
@@ -25,21 +23,18 @@ export function createLiquidityTool(config: MeneseConfig, store: IdentityStore) 
       tokenA: Type.String({ description: "First token in the pair, e.g. 'ETH'" }),
       tokenB: Type.String({ description: "Second token in the pair, e.g. 'USDC'" }),
       amountA: Type.Optional(
-        Type.String({ description: "Amount of tokenA to add (for 'add' action)" }),
+        Type.String({ description: "Amount of tokenA (for 'add' action)" }),
       ),
       amountB: Type.Optional(
-        Type.String({ description: "Amount of tokenB to add (for 'add' action)" }),
+        Type.String({ description: "Amount of tokenB (for 'add' action)" }),
       ),
       lpAmount: Type.Optional(
-        Type.String({ description: "LP token amount to remove (for 'remove' action)" }),
+        Type.String({ description: "LP token amount (for 'remove' action)" }),
       ),
-      mode: stringEnum([...MODES], {
-        description: "Use 'quote' to preview pool impact, 'execute' after user confirms",
-      }),
     }),
     async execute(
       _toolCallId: string,
-      params: {
+      _params: {
         chain: string;
         action: string;
         tokenA: string;
@@ -47,31 +42,15 @@ export function createLiquidityTool(config: MeneseConfig, store: IdentityStore) 
         amountA?: string;
         amountB?: string;
         lpAmount?: string;
-        mode: string;
       },
     ) {
-      const wallet = requireVerifiedWallet(store);
+      const wallet = requireAuthenticatedWallet(store);
       if ("error" in wallet) return wallet.error;
-      const { principal } = wallet;
 
-      const res = await callSdk(
-        "execute",
-        {
-          type: "liquidity",
-          mode: params.mode,
-          chain: params.chain,
-          action: params.action,
-          tokenA: params.tokenA,
-          tokenB: params.tokenB,
-          amountA: params.amountA,
-          amountB: params.amountB,
-          lpAmount: params.lpAmount,
-        },
-        config,
-        { principal },
-      );
-
-      return sdkToResult(res);
+      return jsonResult({
+        error: "Liquidity operations are not yet available via direct SDK calls. " +
+          "DEX liquidity methods will be added in a future update.",
+      });
     },
   };
 }

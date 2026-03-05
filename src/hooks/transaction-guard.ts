@@ -18,6 +18,7 @@ const GUARDED_TOOLS = new Set([
   "menese_lend",
   "menese_liquidity",
   "menese_strategy",
+  "menese_jobs",
 ]);
 
 // Track which operations have been quoted in the current process lifetime.
@@ -62,8 +63,9 @@ export function registerTransactionGuard(api: OpenClawPluginApi, config: MeneseC
 
       const params = event.params as Record<string, unknown>;
 
-      // Strategy: only guard "create" action
+      // Strategy/jobs: only guard "create" action (list/pause/resume/delete/cancel are safe)
       if (event.toolName === "menese_strategy" && params.action !== "create") return;
+      if (event.toolName === "menese_jobs" && params.action !== "create") return;
 
       const mode = params.mode as string | undefined;
       const fingerprint = operationFingerprint(event.toolName, params);

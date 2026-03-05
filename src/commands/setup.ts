@@ -1,15 +1,15 @@
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
 import type { MeneseConfig } from "../config.js";
 import type { IdentityStore } from "../store.js";
-import { isValidPrincipal } from "../store.js";
-import { getAllAddresses } from "../ic-client.js";
+import { generateSeed, getPrincipalFromSeed, getAllAddresses } from "../ic-client.js";
 
 /**
- * /setup [principal?] — Onboarding flow for new users.
+ * /setup — Create a bot-managed wallet for the user.
  *
- * If a principal is provided, validates it, links it,
- * fetches derived addresses from the SDK canister to confirm validity,
- * and auto-verifies the wallet.
+ * Generates an Ed25519 keypair, derives the ICP principal, fetches
+ * all chain addresses from the SDK canister, and stores everything.
+ *
+ * Also supports: /setup import <hex-seed> — import an existing seed.
  */
 export function registerSetupCommand(
   api: OpenClawPluginApi,
@@ -18,86 +18,104 @@ export function registerSetupCommand(
 ): void {
   api.registerCommand({
     name: "setup",
-    description: "Connect your Menese wallet to start using crypto tools",
+    description: "Create your Menese wallet",
     acceptsArgs: true,
     handler: async (ctx) => {
-      const principal = ctx.args?.trim();
+      const args = ctx.args?.trim() ?? "";
       const senderId = ctx.senderId ?? "unknown";
 
-      if (!principal) {
-        const entry = store.getEntry(ctx.channel, senderId);
-        if (entry) {
-          const status = entry.verified ? "verified" : "**unverified** — run `/verify` to complete setup";
-          return {
-            text:
-              `You already have a wallet linked: \`${entry.principal}\`\n` +
-              `Status: ${status}\n\n` +
-              `To change it, run: /setup <new-principal>\n` +
-              `To unlink, run: /link-wallet unlink`,
-          };
-        }
-
+      // Check if already set up
+      const existing = store.getEntry(ctx.channel, senderId);
+      if (existing?.identitySeed && !args) {
+        const addrRes = await getAllAddresses(config, existing.principal);
+        const evm = addrRes.ok ? (addrRes.data.evm?.evmAddress ?? "—") : "—";
         return {
           text:
-            "Welcome to Menese! Let's connect your wallet.\n\n" +
-            "**What is this?**\n" +
-            "Menese uses a non-custodial, canister-based wallet on the Internet Computer. " +
-            "Your ICP principal acts as your identity across 19 blockchains.\n\n" +
-            "**How to find your principal:**\n" +
-            "1. Open your NNS wallet at https://nns.ic0.app\n" +
-            "2. Copy your Principal ID from the account page\n" +
-            "3. Run: `/setup <your-principal>`\n\n" +
-            "**Example:**\n" +
-            "`/setup xxxxx-xxxxx-xxxxx-xxxxx-xxxxx-xxxxx-xxxxx-xxxxx-xxxxx-xxxxx-xxx`\n\n" +
-            "Once linked and verified, you can check balances, swap tokens, bridge across chains, " +
-            "stake, lend, and create automated strategies.",
+            `You already have a wallet.\n\n` +
+            `**Principal:** \`${existing.principal}\`\n` +
+            `**ETH:** \`${evm}\`\n\n` +
+            "To create a new wallet, run `/setup new`\n" +
+            "To unlink, run `/link-wallet unlink`",
         };
       }
 
-      if (!isValidPrincipal(principal)) {
+      // Handle subcommands
+      let seed: string;
+      if (args.startsWith("import ")) {
+        const hexSeed = args.slice(7).trim();
+        if (!/^[0-9a-fA-F]{64}$/.test(hexSeed)) {
+          return {
+            text:
+              "Invalid seed format. Expected 64 hex characters (32 bytes).\n\n" +
+              "Example: `/setup import a1b2c3d4...` (64 hex chars)",
+            isError: true,
+          };
+        }
+        seed = hexSeed.toLowerCase();
+      } else if (args === "new") {
+        if (existing?.identitySeed) {
+          return {
+            text:
+              "⚠️ **This will replace your current wallet.**\n\n" +
+              `Current principal: \`${existing.principal}\`\n\n` +
+              "If you have funds in this wallet, **back up your seed first** — it cannot be recovered.\n\n" +
+              "To confirm, run `/setup new confirm`",
+          };
+        }
+        seed = generateSeed();
+      } else if (args === "new confirm") {
+        seed = generateSeed();
+      } else if (!args) {
+        seed = generateSeed();
+      } else {
         return {
           text:
-            `Invalid principal format: \`${principal}\`\n\n` +
-            "A valid ICP principal uses groups of 5 base32 characters separated by dashes.\n" +
-            "Example: `ewcc5-fiaaa-aaaab-afafq-cai`",
+            "Usage:\n" +
+            "- `/setup` — create a new wallet\n" +
+            "- `/setup new` — create a new wallet (replaces existing)\n" +
+            "- `/setup import <hex-seed>` — import from a 32-byte hex seed",
           isError: true,
         };
       }
 
-      // Link the principal and auto-verify
-      store.link(ctx.channel, senderId, principal);
+      // Derive principal from seed
+      const principal = getPrincipalFromSeed(seed);
 
-      // Fetch addresses from SDK canister to confirm the principal is valid
+      // Store identity
+      store.link(ctx.channel, senderId, principal);
+      store.setSeed(ctx.channel, senderId, seed);
+      store.markVerified(ctx.channel, senderId);
+
+      // Fetch addresses from SDK canister
       const addrRes = await getAllAddresses(config, principal);
 
       if (!addrRes.ok) {
         return {
           text:
-            `Wallet linked but could not fetch addresses.\n` +
-            `Principal: \`${principal}\`\n` +
+            `Wallet created but could not fetch addresses.\n\n` +
+            `**Principal:** \`${principal}\`\n` +
             `Reason: ${addrRes.error}\n\n` +
-            `Run \`/setup ${principal}\` again later to retry.`,
+            "Your wallet is ready. Try again later to see your addresses.",
         };
       }
 
-      // Auto-verify — the principal is valid and we fetched addresses
-      store.markVerified(ctx.channel, senderId);
-
       const evm = addrRes.data.evm?.evmAddress ?? "—";
       const sol = addrRes.data.solana?.address ?? "—";
-      const btc = addrRes.data.bitcoin ?? "—";
+      const btc = addrRes.data.bitcoin?.bech32Address ?? "—";
 
       return {
         text:
-          `Wallet connected and verified!\n\n` +
+          "**Wallet created!**\n\n" +
           `**Principal:** \`${principal}\`\n` +
           `**ETH:** \`${evm}\`\n` +
           `**SOL:** \`${sol}\`\n` +
           `**BTC:** \`${btc}\`\n\n` +
-          "You're all set. Try:\n" +
+          "**Free features** — try now:\n" +
           "- *\"Show me my portfolio\"*\n" +
           "- *\"What's the price of ETH?\"*\n" +
-          "- *\"Check my SOL balance\"*",
+          "- *\"Show me my addresses\"*\n\n" +
+          "**Send, swap, stake & strategies** require a Menese subscription.\n" +
+          "Run `/subscribe` to see plans, then fund your addresses to start.",
       };
     },
   });

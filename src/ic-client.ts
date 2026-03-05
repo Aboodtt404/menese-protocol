@@ -1,14 +1,17 @@
 /**
  * Direct IC canister client — calls MeneseSDK canister methods via @dfinity/agent.
  *
- * This replaces the HTTP relay approach for READ operations (addresses, balances).
- * The SDK canister exposes public methods like getEvmAddressFor(principal) that
- * anyone can call without authentication.
+ * Two modes:
+ * - Anonymous: for public read queries (getEvmAddressFor, balances)
+ * - Authenticated: for write operations (send, swap, bridge, strategy)
+ *   using a per-user Ed25519 identity stored as a 32-byte hex seed.
  */
 
 import { HttpAgent, Actor } from "@dfinity/agent";
 import { IDL } from "@dfinity/candid";
 import { Principal } from "@dfinity/principal";
+import { Ed25519KeyIdentity } from "@dfinity/identity";
+import * as crypto from "node:crypto";
 import type { MeneseConfig } from "./config.js";
 import { EVM_CHAINS, type EvmChain } from "./chains.js";
 
@@ -58,13 +61,80 @@ const CloakAddressInfo = IDL.Record({
 });
 
 const ResultNat64 = IDL.Variant({ ok: IDL.Nat64, err: IDL.Text });
+const ResultText = IDL.Variant({ ok: IDL.Text, err: IDL.Text });
+const ResultNat = IDL.Variant({ ok: IDL.Nat, err: IDL.Text });
+const ResultVoid = IDL.Variant({ ok: IDL.Null, err: IDL.Text });
 const Balance = IDL.Record({ amount: IDL.Nat, denom: IDL.Text });
+
+// Generic send result shapes (all follow { ok: Record, err: Text })
+const SendResultGeneric = IDL.Variant({
+  ok: IDL.Record({ txHash: IDL.Opt(IDL.Text) }),
+  err: IDL.Text,
+});
+
+// Swap result
+const SwapResult = IDL.Variant({
+  ok: IDL.Record({
+    amountIn: IDL.Nat,
+    amountOut: IDL.Nat,
+    txHash: IDL.Opt(IDL.Text),
+  }),
+  err: IDL.Text,
+});
+
+// Strategy Rule types
+const ChainType = IDL.Variant({
+  Bitcoin: IDL.Null, Litecoin: IDL.Null, Ethereum: IDL.Null,
+  Arbitrum: IDL.Null, Base: IDL.Null, Polygon: IDL.Null,
+  BNB: IDL.Null, Optimism: IDL.Null, Solana: IDL.Null,
+  Sui: IDL.Null, TON: IDL.Null, Tron: IDL.Null,
+  XRP: IDL.Null, Aptos: IDL.Null, Cardano: IDL.Null,
+  NEAR: IDL.Null, ICP: IDL.Null, CloakCoin: IDL.Null,
+  Thorchain: IDL.Null,
+});
+
+const RuleType = IDL.Variant({
+  StopLoss: IDL.Null, TakeProfit: IDL.Null, DCA: IDL.Null,
+  Rebalance: IDL.Null, LiquidityProvision: IDL.Null,
+  VolatilityTrigger: IDL.Null, Scheduled: IDL.Null,
+  APYMigration: IDL.Null,
+});
+
+const RuleStatus = IDL.Variant({
+  Active: IDL.Null, Cancelled: IDL.Null, Confirmed: IDL.Null,
+  Draft: IDL.Null, Executed: IDL.Null, Executing: IDL.Null,
+  Failed: IDL.Null, Paused: IDL.Null, Ready: IDL.Null,
+});
+
+const DCAConfig = IDL.Record({
+  intervalSeconds: IDL.Nat64,
+  maxExecutions: IDL.Opt(IDL.Nat),
+});
+
+const Rule = IDL.Record({
+  apyMigrationConfig: IDL.Opt(IDL.Reserved),
+  chainType: ChainType,
+  createdAt: IDL.Int,
+  dcaConfig: IDL.Opt(DCAConfig),
+  id: IDL.Nat,
+  lpConfig: IDL.Opt(IDL.Reserved),
+  positionId: IDL.Nat,
+  ruleType: RuleType,
+  scheduledConfig: IDL.Opt(IDL.Reserved),
+  sizePct: IDL.Nat,
+  status: RuleStatus,
+  swapAmountDrops: IDL.Opt(IDL.Nat64),
+  swapAmountLamports: IDL.Opt(IDL.Nat64),
+  swapAmountWei: IDL.Opt(IDL.Nat),
+  triggerPrice: IDL.Nat64,
+  volatilityConfig: IDL.Opt(IDL.Reserved),
+});
 
 // ── IDL Factory ──────────────────────────────────────────────────────
 
 const idlFactory: IDL.InterfaceFactory = ({ IDL: _IDL }) => {
   return IDL.Service({
-    // Address methods (take principal, return address info)
+    // ── Read: Address methods (take principal, return address info) ──
     getEvmAddressFor: IDL.Func([IDL.Principal], [EvmAddressInfo], []),
     getSolanaAddressFor: IDL.Func([IDL.Principal], [SolanaAddressInfo], []),
     getBitcoinAddressFor: IDL.Func([IDL.Principal], [AddressInfo], []),
@@ -74,7 +144,7 @@ const idlFactory: IDL.InterfaceFactory = ({ IDL: _IDL }) => {
     getSuiAddressFor: IDL.Func([IDL.Principal], [SuiAddressInfo], []),
     getCloakAddressFor: IDL.Func([IDL.Principal], [CloakAddressInfo], []),
 
-    // Balance methods (various signatures)
+    // ── Read: Balance methods ──
     getICPBalanceFor: IDL.Func([IDL.Principal], [ResultNat64], []),
     getSolanaBalance: IDL.Func([IDL.Text], [ResultNat64], []),
     getEvmBalance: IDL.Func([IDL.Text, IDL.Text], [IDL.Opt(IDL.Nat)], []),
@@ -84,6 +154,59 @@ const idlFactory: IDL.InterfaceFactory = ({ IDL: _IDL }) => {
     getTonBalanceFor: IDL.Func([IDL.Text], [ResultNat64], []),
     getCloakBalanceFor: IDL.Func([IDL.Text], [ResultNat64], []),
     getThorBalanceFor: IDL.Func([IDL.Text], [IDL.Vec(Balance)], []),
+
+    // ── Write: Send methods (caller-signed) ──
+    sendEvmNativeTokenAutonomous: IDL.Func(
+      [IDL.Text, IDL.Nat, IDL.Text, IDL.Nat, IDL.Opt(IDL.Text)],
+      [SendResultGeneric], [],
+    ),
+    sendBitcoin: IDL.Func([IDL.Text, IDL.Nat64], [SendResultGeneric], []),
+    sendSolTransaction: IDL.Func([IDL.Text, IDL.Nat64], [SendResultGeneric], []),
+    sendICP: IDL.Func([IDL.Principal, IDL.Nat64], [SendResultGeneric], []),
+    sendSui: IDL.Func([IDL.Text, IDL.Nat64], [SendResultGeneric], []),
+    sendTonSimple: IDL.Func([IDL.Text, IDL.Nat64], [SendResultGeneric], []),
+    sendXrpAutonomous: IDL.Func(
+      [IDL.Text, IDL.Text, IDL.Opt(IDL.Nat32)],
+      [SendResultGeneric], [],
+    ),
+    sendICRC1: IDL.Func(
+      [IDL.Principal, IDL.Nat, IDL.Text],
+      [SendResultGeneric], [],
+    ),
+
+    // ── Write: Swap methods ──
+    swapTokens: IDL.Func(
+      [IDL.Text, IDL.Text, IDL.Text, IDL.Nat, IDL.Nat, IDL.Bool, IDL.Text],
+      [SwapResult], [],
+    ),
+
+    // ── Write: Strategy methods ──
+    addStrategyRule: IDL.Func([Rule], [ResultNat], []),
+    deleteStrategyRule: IDL.Func([IDL.Nat], [ResultVoid], []),
+    getMyStrategyRules: IDL.Func([], [IDL.Vec(Rule)], []),
+    updateStrategyRuleStatus: IDL.Func([IDL.Nat, RuleStatus], [ResultVoid], []),
+
+    // ── Write: Staking/Lending ──
+    stakeEthForStEth: IDL.Func(
+      [IDL.Nat, IDL.Text, IDL.Opt(IDL.Text)],
+      [SendResultGeneric], [],
+    ),
+    aaveSupplyEth: IDL.Func(
+      [IDL.Nat, IDL.Text, IDL.Opt(IDL.Text)],
+      [SendResultGeneric], [],
+    ),
+    aaveSupplyToken: IDL.Func(
+      [IDL.Text, IDL.Nat, IDL.Text, IDL.Opt(IDL.Text)],
+      [SendResultGeneric], [],
+    ),
+    aaveWithdrawEth: IDL.Func(
+      [IDL.Nat, IDL.Text, IDL.Opt(IDL.Text)],
+      [SendResultGeneric], [],
+    ),
+    aaveWithdrawToken: IDL.Func(
+      [IDL.Text, IDL.Nat, IDL.Text, IDL.Opt(IDL.Text)],
+      [SendResultGeneric], [],
+    ),
   });
 };
 
@@ -146,7 +269,7 @@ export async function getAllAddresses(
   if (cached) return { ok: true, data: cached };
 
   try {
-    const actor = getActor(config) as Record<string, (...args: unknown[]) => Promise<unknown>>;
+    const actor = getActor(config) as unknown as Record<string, (...args: unknown[]) => Promise<unknown>>;
     const p = Principal.fromText(principalText);
 
     // Fetch all addresses in parallel
@@ -224,7 +347,7 @@ export async function getChainBalance(
   chain: string,
 ): Promise<{ ok: true; data: BalanceResult } | { ok: false; error: string }> {
   try {
-    const actor = getActor(config) as Record<string, (...args: unknown[]) => Promise<unknown>>;
+    const actor = getActor(config) as unknown as Record<string, (...args: unknown[]) => Promise<unknown>>;
     const evmChains = EVM_CHAINS as readonly string[];
 
     // ICP uses principal directly
@@ -369,7 +492,256 @@ export async function getPortfolio(
   return { ok: true, data: balances };
 }
 
+// ── Identity Management ──────────────────────────────────────────────
+
+/** Generate a new 32-byte random seed (returned as 64-char hex). */
+export function generateSeed(): string {
+  return crypto.randomBytes(32).toString("hex");
+}
+
+/** Derive an ICP principal text from a 32-byte hex seed. */
+export function getPrincipalFromSeed(seed: string): string {
+  const identity = Ed25519KeyIdentity.fromSecretKey(hexToBytes(seed));
+  return identity.getPrincipal().toText();
+}
+
+/** Create an authenticated Actor for the SDK canister using a user's seed. */
+function getAuthenticatedActor(config: MeneseConfig, seed: string) {
+  const identity = Ed25519KeyIdentity.fromSecretKey(hexToBytes(seed));
+  const agent = HttpAgent.createSync({ host: "https://icp-api.io", identity });
+  return Actor.createActor(idlFactory, {
+    agent,
+    canisterId: config.sdkCanisterId,
+  }) as Record<string, (...args: unknown[]) => Promise<unknown>>;
+}
+
+// ── Generic result type for write operations ─────────────────────────
+
+export type SdkWriteResult<T = unknown> =
+  | { ok: true; data: T }
+  | { ok: false; error: string };
+
+function parseResult<T>(raw: unknown): SdkWriteResult<T> {
+  const r = raw as { ok?: T; err?: string };
+  if (r.err !== undefined) return { ok: false, error: r.err };
+  return { ok: true, data: r.ok as T };
+}
+
+// ── EVM Chain IDs ────────────────────────────────────────────────────
+
+const EVM_CHAIN_ID: Record<EvmChain, bigint> = {
+  ethereum: 1n,
+  polygon: 137n,
+  arbitrum: 42161n,
+  base: 8453n,
+  optimism: 10n,
+  bnb: 56n,
+};
+
+// ── Write: Send ──────────────────────────────────────────────────────
+
+export async function sendToken(
+  config: MeneseConfig,
+  seed: string,
+  chain: string,
+  to: string,
+  amount: string,
+  opts?: { token?: string; memo?: string },
+): Promise<SdkWriteResult> {
+  try {
+    const actor = getAuthenticatedActor(config, seed);
+    const evmChains = EVM_CHAINS as readonly string[];
+
+    if (evmChains.includes(chain)) {
+      const weiAmount = parseUnits(amount, 18);
+      const chainId = EVM_CHAIN_ID[chain as EvmChain];
+      const rpc = EVM_RPC[chain as EvmChain];
+      const res = await actor.sendEvmNativeTokenAutonomous(to, weiAmount, rpc, chainId, []);
+      return parseResult(res);
+    }
+    if (chain === "bitcoin") {
+      const sats = parseUnits(amount, 8);
+      const res = await actor.sendBitcoin(to, sats);
+      return parseResult(res);
+    }
+    if (chain === "solana") {
+      const lamports = parseUnits(amount, 9);
+      const res = await actor.sendSolTransaction(to, lamports);
+      return parseResult(res);
+    }
+    if (chain === "icp") {
+      const e8s = parseUnits(amount, 8);
+      const res = await actor.sendICP(Principal.fromText(to), e8s);
+      return parseResult(res);
+    }
+    if (chain === "sui") {
+      const mist = parseUnits(amount, 9);
+      const res = await actor.sendSui(to, mist);
+      return parseResult(res);
+    }
+    if (chain === "ton") {
+      const nanoton = parseUnits(amount, 9);
+      const res = await actor.sendTonSimple(to, nanoton);
+      return parseResult(res);
+    }
+    if (chain === "xrp") {
+      const res = await actor.sendXrpAutonomous(to, amount, []);
+      return parseResult(res);
+    }
+    return { ok: false, error: `Send not supported for chain: ${chain}` };
+  } catch (err) {
+    return { ok: false, error: `Send failed: ${err}` };
+  }
+}
+
+// ── Write: Swap ──────────────────────────────────────────────────────
+
+export async function swapTokensOnChain(
+  config: MeneseConfig,
+  seed: string,
+  params: {
+    chain: string;
+    fromToken: string;
+    toToken: string;
+    amount: string;
+    slippageBps?: number;
+  },
+): Promise<SdkWriteResult> {
+  try {
+    const actor = getAuthenticatedActor(config, seed);
+    const evmChains = EVM_CHAINS as readonly string[];
+
+    if (evmChains.includes(params.chain)) {
+      const amountWei = parseUnits(params.amount, 18);
+      const rpc = EVM_RPC[params.chain as EvmChain];
+      const slippage = BigInt(params.slippageBps ?? 250);
+      // quoteId is empty — SDK will auto-quote
+      const res = await actor.swapTokens(
+        "", params.fromToken, params.toToken,
+        amountWei, slippage, false, rpc,
+      );
+      return parseResult(res);
+    }
+
+    return { ok: false, error: `Swap not yet supported for chain: ${params.chain}. Currently EVM chains only.` };
+  } catch (err) {
+    return { ok: false, error: `Swap failed: ${err}` };
+  }
+}
+
+// ── Write: Staking/Lending ───────────────────────────────────────────
+
+export async function stakeOrLend(
+  config: MeneseConfig,
+  seed: string,
+  params: {
+    action: string;  // "supply" | "withdraw" | "stake"
+    protocol: string; // "aave" | "lido"
+    chain: string;
+    asset?: string;
+    amount: string;
+  },
+): Promise<SdkWriteResult> {
+  try {
+    const actor = getAuthenticatedActor(config, seed);
+    const evmChains = EVM_CHAINS as readonly string[];
+    if (!evmChains.includes(params.chain)) {
+      return { ok: false, error: `Staking/lending not supported for chain: ${params.chain}` };
+    }
+    const rpc = EVM_RPC[params.chain as EvmChain];
+    const amountWei = parseUnits(params.amount, 18);
+
+    if (params.protocol === "lido" && params.action === "stake") {
+      const res = await actor.stakeEthForStEth(amountWei, rpc, []);
+      return parseResult(res);
+    }
+    if (params.protocol === "aave") {
+      if (params.action === "supply" && (!params.asset || params.asset.toUpperCase() === "ETH")) {
+        const res = await actor.aaveSupplyEth(amountWei, rpc, []);
+        return parseResult(res);
+      }
+      if (params.action === "supply" && params.asset) {
+        const res = await actor.aaveSupplyToken(params.asset, amountWei, rpc, []);
+        return parseResult(res);
+      }
+      if (params.action === "withdraw" && (!params.asset || params.asset.toUpperCase() === "ETH")) {
+        const res = await actor.aaveWithdrawEth(amountWei, rpc, []);
+        return parseResult(res);
+      }
+      if (params.action === "withdraw" && params.asset) {
+        const res = await actor.aaveWithdrawToken(params.asset, amountWei, rpc, []);
+        return parseResult(res);
+      }
+    }
+    return { ok: false, error: `Unsupported staking/lending: ${params.protocol} ${params.action}` };
+  } catch (err) {
+    return { ok: false, error: `Staking/lending failed: ${err}` };
+  }
+}
+
+// ── Write: Strategy ──────────────────────────────────────────────────
+
+export async function addStrategy(
+  config: MeneseConfig,
+  seed: string,
+  rule: Record<string, unknown>,
+): Promise<SdkWriteResult<bigint>> {
+  try {
+    const actor = getAuthenticatedActor(config, seed);
+    const res = await actor.addStrategyRule(rule);
+    return parseResult(res);
+  } catch (err) {
+    return { ok: false, error: `Add strategy failed: ${err}` };
+  }
+}
+
+export async function listStrategies(
+  config: MeneseConfig,
+  seed: string,
+): Promise<SdkWriteResult<unknown[]>> {
+  try {
+    const actor = getAuthenticatedActor(config, seed);
+    const res = await actor.getMyStrategyRules();
+    return { ok: true, data: res as unknown[] };
+  } catch (err) {
+    return { ok: false, error: `List strategies failed: ${err}` };
+  }
+}
+
+export async function deleteStrategy(
+  config: MeneseConfig,
+  seed: string,
+  ruleId: number,
+): Promise<SdkWriteResult> {
+  try {
+    const actor = getAuthenticatedActor(config, seed);
+    const res = await actor.deleteStrategyRule(BigInt(ruleId));
+    return parseResult(res);
+  } catch (err) {
+    return { ok: false, error: `Delete strategy failed: ${err}` };
+  }
+}
+
 // ── Helpers ──────────────────────────────────────────────────────────
+
+function hexToBytes(hex: string): Uint8Array {
+  const clean = hex.startsWith("0x") ? hex.slice(2) : hex;
+  const bytes = new Uint8Array(clean.length / 2);
+  for (let i = 0; i < bytes.length; i++) {
+    bytes[i] = parseInt(clean.substring(i * 2, i * 2 + 2), 16);
+  }
+  return bytes;
+}
+
+/** Parse a decimal string to smallest unit (e.g. "1.5" with 18 decimals → bigint). */
+function parseUnits(value: string, decimals: number): bigint {
+  const parts = value.split(".");
+  const whole = parts[0] ?? "0";
+  let frac = parts[1] ?? "";
+  if (frac.length > decimals) frac = frac.slice(0, decimals);
+  frac = frac.padEnd(decimals, "0");
+  return BigInt(whole) * 10n ** BigInt(decimals) + BigInt(frac);
+}
 
 function formatBalance(raw: bigint | number, decimals: number): string {
   const n = BigInt(raw);

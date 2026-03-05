@@ -3,17 +3,15 @@ import { stringEnum } from "openclaw/plugin-sdk";
 import type { MeneseConfig } from "../config.js";
 import type { IdentityStore } from "../store.js";
 import { SUPPORTED_CHAINS } from "../chains.js";
-import { callSdk } from "../sdk-client.js";
-import { jsonResult, sdkToResult, requireVerifiedWallet } from "./_helpers.js";
-
-const MODES = ["quote", "execute"] as const;
+import { swapTokensOnChain } from "../ic-client.js";
+import { writeToResult, requireAuthenticatedWallet, invalidateBalanceCaches } from "./_helpers.js";
 
 export function createSwapTool(config: MeneseConfig, store: IdentityStore) {
   return {
     name: "menese_swap",
     label: "Menese Swap",
     description:
-      "Swap tokens on a given chain. Use mode 'quote' first to show the user expected output and fees, then 'execute' after confirmation. Supports multi-hop routes automatically. Requires a verified wallet.",
+      "Swap tokens on a given chain. Supports EVM chains with auto-routing. Requires a wallet (run /setup first).",
     parameters: Type.Object({
       chain: stringEnum([...SUPPORTED_CHAINS], {
         description: "Blockchain to swap on",
@@ -24,10 +22,6 @@ export function createSwapTool(config: MeneseConfig, store: IdentityStore) {
       slippageBps: Type.Optional(
         Type.Number({ description: "Max slippage in basis points (100 = 1%, default: 250 = 2.5%)", minimum: 1, maximum: 5000 }),
       ),
-      dex: Type.Optional(Type.String({ description: "DEX to use (default: auto-select best route)" })),
-      mode: stringEnum([...MODES], {
-        description: "Use 'quote' to preview output, 'execute' to swap after user confirms",
-      }),
     }),
     async execute(
       _toolCallId: string,
@@ -37,31 +31,20 @@ export function createSwapTool(config: MeneseConfig, store: IdentityStore) {
         toToken: string;
         amount: string;
         slippageBps?: number;
-        dex?: string;
-        mode: string;
       },
     ) {
-      const wallet = requireVerifiedWallet(store);
+      const wallet = requireAuthenticatedWallet(store);
       if ("error" in wallet) return wallet.error;
-      const { principal } = wallet;
 
-      const res = await callSdk(
-        "execute",
-        {
-          type: "swap",
-          mode: params.mode,
-          chain: params.chain,
-          fromToken: params.fromToken,
-          toToken: params.toToken,
-          amount: params.amount,
-          slippageBps: String(params.slippageBps ?? 250),
-          dex: params.dex,
-        },
-        config,
-        { principal },
-      );
-
-      return sdkToResult(res);
+      const res = await swapTokensOnChain(config, wallet.seed, {
+        chain: params.chain,
+        fromToken: params.fromToken,
+        toToken: params.toToken,
+        amount: params.amount,
+        slippageBps: params.slippageBps,
+      });
+      if (res.ok) invalidateBalanceCaches(wallet.principal);
+      return writeToResult(res);
     },
   };
 }

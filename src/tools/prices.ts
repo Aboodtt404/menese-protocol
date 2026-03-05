@@ -2,6 +2,7 @@ import { Type } from "@sinclair/typebox";
 import type { MeneseConfig } from "../config.js";
 import type { IdentityStore } from "../store.js";
 import { jsonResult } from "./_helpers.js";
+import { cacheFetch, CacheKeys, TTL } from "../cache.js";
 
 // Map common symbols to CoinGecko IDs
 const COINGECKO_IDS: Record<string, string> = {
@@ -38,12 +39,17 @@ export function createPricesTool(_config: MeneseConfig, _store: IdentityStore) {
       }
 
       try {
-        const url = `https://api.coingecko.com/api/v3/simple/price?ids=${ids.join(",")}&vs_currencies=usd&include_24hr_change=true`;
-        const res = await fetch(url, { signal: AbortSignal.timeout(10_000) });
-        if (!res.ok) {
-          return jsonResult({ error: `Price API error: HTTP ${res.status}` });
-        }
-        const data = (await res.json()) as Record<string, { usd?: number; usd_24h_change?: number }>;
+        const idsKey = ids.slice().sort().join(",");
+        const data = await cacheFetch(
+          CacheKeys.prices(idsKey),
+          TTL.PRICES,
+          async () => {
+            const url = `https://api.coingecko.com/api/v3/simple/price?ids=${ids.join(",")}&vs_currencies=usd&include_24hr_change=true`;
+            const res = await fetch(url, { signal: AbortSignal.timeout(10_000) });
+            if (!res.ok) throw new Error(`HTTP ${res.status}`);
+            return (await res.json()) as Record<string, { usd?: number; usd_24h_change?: number }>;
+          },
+        );
 
         // Map back to symbols
         const prices: Record<string, { usd: number; change24h?: number }> = {};
