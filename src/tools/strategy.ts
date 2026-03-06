@@ -3,7 +3,7 @@ import { stringEnum } from "openclaw/plugin-sdk";
 import type { MeneseConfig } from "../config.js";
 import type { IdentityStore } from "../store.js";
 import { SUPPORTED_CHAINS, EVM_CHAINS } from "../chains.js";
-import { addStrategy, listStrategies, deleteStrategy } from "../ic-client.js";
+import { addStrategy, listStrategies, deleteStrategy, getStrategyLogs, updateStrategyStatus } from "../ic-client.js";
 import {
   createAgentJob,
   listAgentJobs,
@@ -14,9 +14,9 @@ import {
   priceBelowCondition,
   swapJobAction,
 } from "../agent-client.js";
-import { writeToResult, agentToResult, jsonResult, requireAuthenticatedWallet, hasAgent, requireAgentWallet } from "./_helpers.js";
+import { writeToResult, agentToResult, jsonResult, cardResult, requireAuthenticatedWallet, hasAgent, requireAgentWallet } from "./_helpers.js";
 
-const ACTIONS = ["create", "list", "cancel"] as const;
+const ACTIONS = ["create", "list", "cancel", "logs", "pause", "resume"] as const;
 const STRATEGY_TYPES = ["dca", "take_profit", "stop_loss"] as const;
 
 /** Map our chain strings to SDK ChainType variants. */
@@ -58,13 +58,15 @@ export function createStrategyTool(config: MeneseConfig, store: IdentityStore) {
       "For 'create': provide strategyType, chain, amount, and relevant params.\n" +
       "For 'list': shows all active strategy rules.\n" +
       "For 'cancel': provide ruleId to delete a strategy.\n" +
+      "For 'logs': shows execution logs for all strategies.\n" +
+      "For 'pause': provide ruleId to pause a strategy.\n" +
+      "For 'resume': provide ruleId to resume a paused strategy.\n" +
       "Requires a wallet (run /setup first).\n\n" +
-      "IMPORTANT: Always display the full result to the user after every action (create, list, cancel). " +
-      "After creating a strategy, show the rule ID, type, chain, trigger price, and status. " +
-      "Never silently complete — the user expects confirmation with details.",
+      "IMPORTANT: Results are already formatted. Display them exactly as returned inside a code block. " +
+      "Do NOT reformat, add emojis, or build tables. Never silently complete.",
     parameters: Type.Object({
       action: stringEnum([...ACTIONS], {
-        description: "'create' a new strategy, 'list' active strategies, 'cancel' by ruleId",
+        description: "'create' a new strategy, 'list' active strategies, 'cancel' by ruleId, 'logs' for execution history, 'pause'/'resume' by ruleId",
       }),
       strategyType: Type.Optional(stringEnum([...STRATEGY_TYPES], {
         description: "Strategy type (required for 'create')",
@@ -128,7 +130,7 @@ export function createStrategyTool(config: MeneseConfig, store: IdentityStore) {
           const res = await listStrategies(config, wallet.seed);
           if (res.ok) {
             const rules = (res.data as RawRule[]).map(formatRule);
-            return jsonResult({ strategies: rules, count: rules.length });
+            return cardResult(fmtList(rules), { strategies: rules, count: rules.length });
           }
           return writeToResult(res);
         }
@@ -204,7 +206,7 @@ export function createStrategyTool(config: MeneseConfig, store: IdentityStore) {
 
           const res = await addStrategy(config, wallet.seed, rule);
           if (res.ok) {
-            return jsonResult({
+            const detail = {
               success: true,
               ruleId: res.data,
               strategyType: params.strategyType,
@@ -212,10 +214,31 @@ export function createStrategyTool(config: MeneseConfig, store: IdentityStore) {
               amount: params.amount,
               targetPrice: params.targetPrice ?? null,
               intervalSeconds: params.intervalSeconds ?? null,
-              message: `Strategy created successfully (Rule #${res.data})`,
-            });
+            };
+            return cardResult(fmtCreate(detail), detail);
           }
           return writeToResult(res);
+        }
+
+        case "logs": {
+          const logsRes = await getStrategyLogs(config, wallet.seed);
+          if (!logsRes.ok) return writeToResult(logsRes);
+          const logs = (logsRes.data as RawLog[]).map(formatLog);
+          return cardResult(fmtLogs(logs), { logs, count: logs.length });
+        }
+
+        case "pause": {
+          if (params.ruleId == null) return jsonResult({ error: "Missing required parameter: ruleId" });
+          const pauseRes = await updateStrategyStatus(config, wallet.seed, params.ruleId, "paused");
+          if (!pauseRes.ok) return writeToResult(pauseRes);
+          return cardResult(`STRATEGY #${params.ruleId}\n${"─".repeat(30)}\nStatus: Paused`, { success: true, ruleId: params.ruleId, newStatus: "Paused" });
+        }
+
+        case "resume": {
+          if (params.ruleId == null) return jsonResult({ error: "Missing required parameter: ruleId" });
+          const resumeRes = await updateStrategyStatus(config, wallet.seed, params.ruleId, "active");
+          if (!resumeRes.ok) return writeToResult(resumeRes);
+          return cardResult(`STRATEGY #${params.ruleId}\n${"─".repeat(30)}\nStatus: Active`, { success: true, ruleId: params.ruleId, newStatus: "Active" });
         }
 
         default:
@@ -295,6 +318,30 @@ function parseAmount(amount: string, chain: string, evmChains: readonly string[]
   return BigInt(whole) * 10n ** BigInt(decimals) + BigInt(frac);
 }
 
+/** Raw execution log shape from the canister. */
+interface RawLog {
+  error: [string] | [];
+  intent_hash: string;
+  rule_id: string;
+  stage: Record<string, null>;
+  ts: string | bigint;
+  tx_id: [string] | [];
+}
+
+/** Convert a raw execution log into a human-readable object. */
+function formatLog(raw: RawLog) {
+  const tsNano = BigInt(raw.ts);
+  const tsMs = Number(tsNano / 1_000_000n);
+  return {
+    ruleId: raw.rule_id,
+    stage: variantKey(raw.stage),
+    timestamp: new Date(tsMs).toISOString(),
+    intentHash: raw.intent_hash || null,
+    txId: raw.tx_id?.[0] ?? null,
+    error: raw.error?.[0] ?? null,
+  };
+}
+
 /** Raw rule shape from the canister (Candid variant fields). */
 interface RawRule {
   id: string | bigint;
@@ -321,9 +368,9 @@ function formatRule(raw: RawRule) {
   const triggerPrice = Number(raw.triggerPrice);
   const triggerUsd = triggerPrice > 0 ? triggerPrice / 1_000_000 : null;
   const amount =
-    raw.swapAmountLamports?.[0] ? `${Number(raw.swapAmountLamports[0]) / 1e9} (lamports)` :
-    raw.swapAmountWei?.[0] ? `${Number(raw.swapAmountWei[0]) / 1e18} (wei)` :
-    raw.swapAmountDrops?.[0] ? `${Number(raw.swapAmountDrops[0]) / 1e6} (drops)` :
+    raw.swapAmountLamports?.[0] ? `${Number(raw.swapAmountLamports[0]) / 1e9} SOL` :
+    raw.swapAmountWei?.[0] ? `${Number(raw.swapAmountWei[0]) / 1e18} ETH` :
+    raw.swapAmountDrops?.[0] ? `${Number(raw.swapAmountDrops[0]) / 1e6} XRP` :
     "n/a";
 
   return {
@@ -336,3 +383,51 @@ function formatRule(raw: RawRule) {
     hasDca: raw.dcaConfig?.length > 0,
   };
 }
+
+// ── Text formatters ──────────────────────────────────────────────────
+
+function pad(s: string, len: number): string {
+  return s.length >= len ? s : s + " ".repeat(len - s.length);
+}
+
+function fmtList(rules: ReturnType<typeof formatRule>[]): string {
+  if (rules.length === 0) return "STRATEGIES\n" + "─".repeat(40) + "\nNo active strategies.";
+  const lines: string[] = ["STRATEGIES"];
+  lines.push("─".repeat(50));
+  lines.push(`${pad("ID", 5)}${pad("Type", 14)}${pad("Chain", 10)}${pad("Status", 10)}${pad("Trigger", 10)}Amount`);
+  lines.push("─".repeat(50));
+  for (const r of rules) {
+    lines.push(`${pad("#" + r.id, 5)}${pad(r.type, 14)}${pad(r.chain, 10)}${pad(r.status, 10)}${pad(r.triggerPriceUsd ?? "—", 10)}${r.amount}`);
+  }
+  lines.push("─".repeat(50));
+  lines.push(`${rules.length} strategy(s)`);
+  return lines.join("\n");
+}
+
+function fmtCreate(d: { ruleId: unknown; strategyType?: string; chain?: string; amount?: string; targetPrice?: string | null; intervalSeconds?: number | null }): string {
+  const lines: string[] = [`STRATEGY CREATED — Rule #${d.ruleId}`];
+  lines.push("─".repeat(35));
+  lines.push(`Type:     ${d.strategyType}`);
+  lines.push(`Chain:    ${d.chain}`);
+  lines.push(`Amount:   ${d.amount}`);
+  if (d.targetPrice) lines.push(`Trigger:  $${d.targetPrice}`);
+  if (d.intervalSeconds) lines.push(`Interval: ${d.intervalSeconds}s`);
+  lines.push(`Status:   Active`);
+  return lines.join("\n");
+}
+
+function fmtLogs(logs: ReturnType<typeof formatLog>[]): string {
+  if (logs.length === 0) return "EXECUTION LOGS\n" + "─".repeat(40) + "\nNo logs yet.";
+  const lines: string[] = ["EXECUTION LOGS"];
+  lines.push("─".repeat(60));
+  for (const l of logs) {
+    const ts = l.timestamp.replace("T", " ").slice(0, 19);
+    lines.push(`[${ts}] Rule #${l.ruleId}  ${l.stage}`);
+    if (l.txId) lines.push(`  tx: ${l.txId}`);
+    if (l.error) lines.push(`  err: ${l.error}`);
+  }
+  lines.push("─".repeat(60));
+  lines.push(`${logs.length} log(s)`);
+  return lines.join("\n");
+}
+

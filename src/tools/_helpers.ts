@@ -16,6 +16,19 @@ export function jsonResult(payload: unknown) {
   };
 }
 
+/**
+ * Pre-formatted card result — the AI should display this text as-is
+ * instead of spending tokens reformatting JSON into tables/emojis.
+ * The structured data is still in `details` for programmatic use.
+ */
+export function cardResult(card: string, payload: unknown) {
+  return {
+    content: [{ type: "text" as const, text: card }],
+    details: payload,
+  };
+}
+
+
 /** Convert an SdkWriteResult to a tool result */
 export function writeToResult<T>(res: SdkWriteResult<T>) {
   if (res.ok) {

@@ -13,7 +13,8 @@ export function createQuoteTool(config: MeneseConfig, store: IdentityStore) {
     label: "Menese Quote",
     description:
       "Get swap quotes, balances, and addresses for your wallet. " +
-      "Use 'quote' to get a swap price estimate before executing. Requires a wallet (run /setup first).",
+      "Use 'quote' to get a swap price estimate before executing. Requires a wallet (run /setup first).\n\n" +
+      "IMPORTANT: Display results exactly as returned inside a code block. Do NOT reformat or add emojis.",
     parameters: Type.Object({
       action: stringEnum(["balance", "addresses", "quote"] as const, {
         description: "'balance' to check a chain balance, 'addresses' to show all derived addresses, 'quote' to get a swap price estimate",

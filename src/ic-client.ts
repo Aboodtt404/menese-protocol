@@ -288,6 +288,43 @@ const XrpPathsResult = IDL.Record({
   success: IDL.Bool,
 });
 
+// BTC/LTC send result (dynamic fee)
+const SendResultBtcLtc = IDL.Variant({
+  ok: IDL.Record({
+    txid: IDL.Text, amount: IDL.Nat64, fee: IDL.Nat64,
+    senderAddress: IDL.Text, recipientAddress: IDL.Text, note: IDL.Text,
+  }),
+  err: IDL.Text,
+});
+
+// SPL transfer result (flat record)
+const TransferAndSendResult = IDL.Record({
+  txSignature: IDL.Text, serializedTxBase64: IDL.Text, blockhash: IDL.Text,
+});
+
+// ICRC-1 token info result
+const ICRC1TokenInfoResult = IDL.Variant({
+  ok: IDL.Record({
+    canisterId: IDL.Text, decimals: IDL.Nat8, fee: IDL.Nat,
+    name: IDL.Text, symbol: IDL.Text,
+  }),
+  err: IDL.Text,
+});
+
+// Strategy execution log types
+const ExecutionStage = IDL.Variant({
+  ACTIVATED: IDL.Null, ADDRESS_GENERATED: IDL.Null, BROADCASTING: IDL.Null,
+  BUILT_TX: IDL.Null, CHECKED: IDL.Null, CONFIG_UPDATED: IDL.Null,
+  CONFIRMED: IDL.Null, DCA_EXECUTED: IDL.Null, EXECUTING: IDL.Null,
+  FAILED: IDL.Null, PNL_REPORTED: IDL.Null, POSITION_CREATED: IDL.Null,
+  RULE_CREATED: IDL.Null, SENT: IDL.Null, SIGNING: IDL.Null,
+  TRIGGERED: IDL.Null, VALIDATED: IDL.Null,
+});
+const ExecutionLog = IDL.Record({
+  error: IDL.Opt(IDL.Text), intent_hash: IDL.Text, rule_id: IDL.Text,
+  stage: ExecutionStage, ts: IDL.Int, tx_id: IDL.Opt(IDL.Text),
+});
+
 // Strategy Rule types
 const ChainType = IDL.Variant({
   Bitcoin: IDL.Null, Litecoin: IDL.Null, Ethereum: IDL.Null,
@@ -406,6 +443,9 @@ const idlFactory: IDL.InterfaceFactory = ({ IDL: _IDL }) => {
       type_: IDL.Text, category: IDL.Text,
     }))], ["query"]),
 
+    // ── Read: ICRC-1 token info ──
+    getICRC1TokenInfo: IDL.Func([IDL.Text], [ICRC1TokenInfoResult], []),
+
     // ── Write: Send methods (caller-signed) ──
     sendEvmNativeTokenAutonomous: IDL.Func(
       [IDL.Text, IDL.Nat, IDL.Text, IDL.Nat, IDL.Opt(IDL.Text)],
@@ -431,6 +471,15 @@ const idlFactory: IDL.InterfaceFactory = ({ IDL: _IDL }) => {
     sendNearTransfer: IDL.Func([IDL.Text, IDL.Nat], [ResultText], []),
     sendCloak: IDL.Func([IDL.Text, IDL.Nat64], [SendResultCloak], []),
     sendThor: IDL.Func([IDL.Text, IDL.Nat64, IDL.Text], [ResultText], []),
+    sendBitcoinDynamicFee: IDL.Func([IDL.Text, IDL.Nat64], [SendResultBtcLtc], []),
+    transferSplToken: IDL.Func([IDL.Nat64, IDL.Text, IDL.Text], [TransferAndSendResult], []),
+    getMySolanaAta: IDL.Func([IDL.Text], [ResultText], []),
+    createMySolanaAtaForMint: IDL.Func([IDL.Text], [ResultText], []),
+    sendTrc20: IDL.Func([IDL.Text, IDL.Text, IDL.Nat, IDL.Nat64], [ResultText], []),
+    sendXrpIOU: IDL.Func(
+      [IDL.Text, IDL.Text, IDL.Text, IDL.Text, IDL.Opt(IDL.Nat32)],
+      [SendResultXrpFlat], [],
+    ),
 
     // ── Write: Swap methods ──
     swapTokens: IDL.Func(
@@ -486,6 +535,7 @@ const idlFactory: IDL.InterfaceFactory = ({ IDL: _IDL }) => {
     deleteStrategyRule: IDL.Func([IDL.Nat], [ResultVoid], []),
     getMyStrategyRules: IDL.Func([], [IDL.Vec(Rule)], []),
     updateStrategyRuleStatus: IDL.Func([IDL.Nat, RuleStatus], [ResultVoid], []),
+    getStrategyLogs: IDL.Func([], [IDL.Vec(ExecutionLog)], ["query"]),
 
     // ── Billing / Subscription ──
     getMyGatewayAccount: IDL.Func([], [UserAccount], []),
@@ -1055,6 +1105,165 @@ export async function getAllICRC1Balances(
   return balances;
 }
 
+// ── ICRC-1 Token Info ────────────────────────────────────────────────
+
+export async function getICRC1TokenInfo(
+  config: MeneseConfig,
+  seed: string,
+  canisterIdOrSymbol: string,
+): Promise<SdkWriteResult<{ canisterId: string; decimals: number; fee: bigint; name: string; symbol: string }>> {
+  try {
+    const actor = getAuthenticatedActor(config, seed);
+    let canisterId = canisterIdOrSymbol;
+    if (!canisterIdOrSymbol.includes("-")) {
+      const tokens = await getSupportedICPTokens(config);
+      const match = tokens.find((t) => t.symbol.toUpperCase() === canisterIdOrSymbol.toUpperCase());
+      if (!match) return { ok: false, error: `Unknown ICRC-1 token: ${canisterIdOrSymbol}` };
+      canisterId = match.canisterId;
+    }
+    const res = await actor.getICRC1TokenInfo(canisterId);
+    return parseResult(res);
+  } catch (err) {
+    return { ok: false, error: `getICRC1TokenInfo failed: ${err}` };
+  }
+}
+
+// ── Token Send: ICRC-1 ──────────────────────────────────────────────
+
+export async function sendICRC1Token(
+  config: MeneseConfig,
+  seed: string,
+  to: string,
+  amount: string,
+  tokenSymbolOrCanisterId: string,
+): Promise<SdkWriteResult> {
+  try {
+    const info = await getICRC1TokenInfo(config, seed, tokenSymbolOrCanisterId);
+    if (!info.ok) return { ok: false, error: info.error };
+    const { canisterId, decimals } = info.data;
+    const amountRaw = parseUnits(amount, decimals);
+    const actor = getAuthenticatedActor(config, seed);
+    const res = await actor.sendICRC1(Principal.fromText(to), amountRaw, canisterId);
+    return parseResult(res);
+  } catch (err) {
+    return { ok: false, error: `sendICRC1 failed: ${err}` };
+  }
+}
+
+// ── Token Send: SPL (Solana) ────────────────────────────────────────
+
+export async function transferSplTokenSend(
+  config: MeneseConfig,
+  seed: string,
+  mintAddress: string,
+  destinationAta: string,
+  amount: string,
+  decimals: number,
+): Promise<SdkWriteResult> {
+  try {
+    const actor = getAuthenticatedActor(config, seed);
+    const ataRes = (await actor.getMySolanaAta(mintAddress)) as { ok?: string; err?: string };
+    let sourceAta: string;
+    if (ataRes.err) {
+      const createRes = (await actor.createMySolanaAtaForMint(mintAddress)) as { ok?: string; err?: string };
+      if (createRes.err) return { ok: false, error: `Failed to create ATA: ${createRes.err}` };
+      sourceAta = createRes.ok!;
+    } else {
+      sourceAta = ataRes.ok!;
+    }
+    const amountRaw = parseUnits(amount, decimals);
+    const res = await actor.transferSplToken(amountRaw, sourceAta, destinationAta);
+    return { ok: true, data: res };
+  } catch (err) {
+    return { ok: false, error: `SPL transfer failed: ${err}` };
+  }
+}
+
+// ── Token Send: TRC-20 (Tron) ───────────────────────────────────────
+
+const TRC20_CONTRACTS: Record<string, { address: string; decimals: number }> = {
+  USDT: { address: "TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t", decimals: 6 },
+  USDC: { address: "TEkxiTehnzSmSe2XqrBj4w32RUN966rdz8", decimals: 6 },
+};
+
+export async function sendTrc20Token(
+  config: MeneseConfig,
+  seed: string,
+  contractAddress: string,
+  to: string,
+  amount: string,
+  decimals: number,
+  feeLimit?: number,
+): Promise<SdkWriteResult> {
+  try {
+    const actor = getAuthenticatedActor(config, seed);
+    const amountRaw = parseUnits(amount, decimals);
+    const feeLimitSun = BigInt(feeLimit ?? 30_000_000);
+    const res = await actor.sendTrc20(contractAddress, to, amountRaw, feeLimitSun);
+    return parseResult(res);
+  } catch (err) {
+    return { ok: false, error: `TRC-20 transfer failed: ${err}` };
+  }
+}
+
+// ── Token Send: XRP IOU ─────────────────────────────────────────────
+
+export async function sendXrpIOUToken(
+  config: MeneseConfig,
+  seed: string,
+  to: string,
+  currency: string,
+  issuer: string,
+  amount: string,
+  destinationTag?: number,
+): Promise<SdkWriteResult> {
+  try {
+    const actor = getAuthenticatedActor(config, seed);
+    const tag = destinationTag != null ? [destinationTag] : [];
+    const res = await actor.sendXrpIOU(to, currency, issuer, amount, tag);
+    return { ok: true, data: res };
+  } catch (err) {
+    return { ok: false, error: `XRP IOU transfer failed: ${err}` };
+  }
+}
+
+// ── Strategy: Logs + Status Update ──────────────────────────────────
+
+export async function getStrategyLogs(
+  config: MeneseConfig,
+  seed: string,
+): Promise<SdkWriteResult<unknown[]>> {
+  try {
+    const actor = getAuthenticatedActor(config, seed);
+    const res = await actor.getStrategyLogs();
+    return { ok: true, data: res as unknown[] };
+  } catch (err) {
+    return { ok: false, error: `Get strategy logs failed: ${err}` };
+  }
+}
+
+export async function updateStrategyStatus(
+  config: MeneseConfig,
+  seed: string,
+  ruleId: number,
+  status: string,
+): Promise<SdkWriteResult> {
+  const statusMap: Record<string, Record<string, null>> = {
+    active: { Active: null },
+    paused: { Paused: null },
+    cancelled: { Cancelled: null },
+  };
+  const variant = statusMap[status.toLowerCase()];
+  if (!variant) return { ok: false, error: `Invalid status: ${status}. Valid: active, paused, cancelled` };
+  try {
+    const actor = getAuthenticatedActor(config, seed);
+    const res = await actor.updateStrategyRuleStatus(BigInt(ruleId), variant);
+    return parseResult(res);
+  } catch (err) {
+    return { ok: false, error: `Update strategy status failed: ${err}` };
+  }
+}
+
 // ── Identity Management ──────────────────────────────────────────────
 
 /** Generate a new 32-byte random seed (returned as 64-char hex). */
@@ -1124,13 +1333,20 @@ export async function sendToken(
     }
     if (chain === "bitcoin") {
       const sats = parseUnits(amount, 8);
-      const res = await actor.sendBitcoin(to, sats);
+      const res = await actor.sendBitcoinDynamicFee(to, sats);
       return parseResult(res);
+    }
+    if (chain === "solana" && opts?.token) {
+      const mintAddress = SOLANA_MINTS[opts.token.toUpperCase()] ?? opts.token;
+      return transferSplTokenSend(config, seed, mintAddress, to, amount, 6);
     }
     if (chain === "solana") {
       const lamports = parseUnits(amount, 9);
       const res = await actor.sendSolTransaction(to, lamports);
       return parseResult(res);
+    }
+    if (chain === "icp" && opts?.token) {
+      return sendICRC1Token(config, seed, to, amount, opts.token);
     }
     if (chain === "icp") {
       const e8s = parseUnits(amount, 8);
@@ -1147,6 +1363,11 @@ export async function sendToken(
       const res = await actor.sendTonSimple(to, nanoton);
       return parseResult(res);
     }
+    if (chain === "xrp" && opts?.token) {
+      const parts = opts.token.split(":");
+      if (parts.length !== 2) return { ok: false, error: "XRP token format: 'CURRENCY:ISSUER' (e.g. 'USD:rhub8VRN55s...')" };
+      return sendXrpIOUToken(config, seed, to, parts[0], parts[1], amount);
+    }
     if (chain === "xrp") {
       const res = await actor.sendXrpAutonomous(to, amount, []);
       return parseResult(res);
@@ -1160,6 +1381,12 @@ export async function sendToken(
       const lovelace = parseUnits(amount, 6);
       const res = await actor.sendCardanoTransaction(to, lovelace);
       return parseResult(res);
+    }
+    if (chain === "tron" && opts?.token) {
+      const known = TRC20_CONTRACTS[opts.token.toUpperCase()];
+      const contractAddr = known?.address ?? opts.token;
+      const decimals = known?.decimals ?? 6;
+      return sendTrc20Token(config, seed, contractAddr, to, amount, decimals);
     }
     if (chain === "tron") {
       const sun = parseUnits(amount, 6);
