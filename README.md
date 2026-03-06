@@ -9,9 +9,6 @@ Talk to your OpenClaw AI naturally to manage crypto:
 - **Send** tokens on any chain
 - **Swap** via DEXs (Uniswap, Raydium, ICPSwap, etc.)
 - **Bridge** cross-chain (CCTP, Ultrafast)
-- **Stake** (Lido, Aave)
-- **Lend/Borrow** (Aave V3)
-- **Manage liquidity** pools
 - **Create strategies** (DCA, TP/SL, volatility triggers)
 - **Scheduled jobs** via on-chain agent canister (recurring DCA, conditional sells)
 - **Check balances**, prices, portfolio
@@ -133,8 +130,8 @@ menese-protocol/
     ├── chains.ts               # 19 supported chains
     ├── canisters.ts            # Canister IDs (prod/test)
     ├── tools/                  # AI tools
-    │   ├── send.ts, swap.ts, stake.ts, lend.ts, bridge.ts
-    │   ├── quote.ts, liquidity.ts, strategy.ts, jobs.ts
+    │   ├── send.ts, swap.ts, bridge.ts
+    │   ├── quote.ts, strategy.ts, jobs.ts
     │   ├── balance.ts, portfolio.ts, prices.ts
     │   └── _helpers.ts
     ├── hooks/
