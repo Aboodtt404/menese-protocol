@@ -20,7 +20,7 @@ Ethereum, Polygon, Arbitrum, Base, Optimism, BNB, Solana, Bitcoin, Litecoin, ICP
 ## Install
 
 ```bash
-openclaw plugins install @menese/menese-protocol
+openclaw plugins install @menese_protocol/openclaw
 ```
 
 Or from a local clone:
