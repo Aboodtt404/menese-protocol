@@ -1,6 +1,6 @@
 {
   "name": "@menese_protocol/openclaw",
-  "version": "0.2.1",
+  "version": "0.2.3",
   "description": "Menese Protocol — multi-chain crypto wallet, swaps, bridges, lending & strategies for OpenClaw",
   "type": "module",
   "license": "MIT",
@@ -38,6 +38,7 @@
     "@dfinity/identity": "^3.4.3",
     "@dfinity/principal": "^3.4.3",
     "@noble/curves": "1.9.7",
-    "@noble/hashes": "1.8.0"
+    "@noble/hashes": "1.8.0",
+    "@sinclair/typebox": "^0.34.48"
   }
 }
