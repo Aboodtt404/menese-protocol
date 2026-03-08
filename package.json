@@ -1,5 +1,5 @@
 {
-  "name": "@menese_protocol/openclaw",
+  "name": "@menese_protocol/menese-protocol",
   "version": "0.2.4",
   "description": "Menese Protocol — multi-chain crypto wallet, swaps, bridges, lending & strategies for OpenClaw",
   "type": "module",
